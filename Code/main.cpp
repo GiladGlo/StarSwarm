@@ -51,6 +51,9 @@ struct Gfx {
     Texture2D player{}, bee[2]{}, fly[2]{}, boss[2]{}, bossDmg[2]{}, glow{}, nebula{};
     static constexpr int BOSS_N = 384;
     Texture2D meteor[7]{};                             // [6] = volatile (explosive) rock
+    Texture2D dart{}, shielded[2]{}, splitter[2]{};    // later-wave enemy types
+    Texture2D planet[10]{};                            // one backdrop body per boss cycle
+    bool planetLoaded[10]{};
     Texture2D bossTex[10]{};
     std::vector<unsigned char> bossMask[10];          // alpha masks for pixel-accurate hit tests
     bool bossLoaded[10]{};
@@ -69,6 +72,8 @@ struct Gfx {
             bossDmg[f] = spr::boss(N, f, true);
         }
         for (int i = 0; i < 7; ++i) meteor[i] = spr::meteor(192, i);
+        dart = spr::dart(N);
+        for (int f = 0; f < 2; ++f) { shielded[f] = spr::shieldedBug(N, f); splitter[f] = spr::splitter(N, f); }
         glow = spr::glow(64);
         nebula = spr::nebula(300, 400);
     }
@@ -77,9 +82,50 @@ struct Gfx {
             UnloadTexture(*t);
         for (int i = 0; i < 10; ++i) if (bossLoaded[i]) UnloadTexture(bossTex[i]);
         for (auto& m : meteor) UnloadTexture(m);
+        for (Texture2D* t : { &dart, &shielded[0], &shielded[1], &splitter[0], &splitter[1] }) UnloadTexture(*t);
+        for (int i = 0; i < 10; ++i) if (planetLoaded[i]) UnloadTexture(planet[i]);
     }
 };
 static Gfx gfx;
+
+// ----------------------------------------------------------------------------
+//  Visual theme per 6-stage boss cycle: sky gradient, nebula tint and a distant body
+// ----------------------------------------------------------------------------
+struct Theme { Color top, bottom, neb; int style; Vector3 c1, c2; bool ring; float px, py, size; };
+static const Theme THEMES[10] = {
+    { { 2, 2, 10, 255 },  { 8, 4, 22, 255 },   { 255, 255, 255, 170 }, 0, spr::rgb(150, 80, 60),  spr::rgb(90, 50, 40),   false, 0.78f, 0.30f, 150 },  // Vanguard: red rock world
+    { { 10, 5, 2, 255 },  { 26, 12, 4, 255 },  { 255, 190, 120, 160 }, 1, spr::rgb(220, 150, 70), spr::rgb(150, 80, 40),  true,  0.22f, 0.25f, 260 },  // Talon: ringed amber giant
+    { { 4, 3, 2, 255 },   { 12, 10, 6, 255 },  { 200, 180, 140, 120 }, 2, spr::rgb(60, 50, 40),   spr::rgb(255, 210, 120), false, 0.72f, 0.22f, 190 },  // Eclipse: eclipsed sun
+    { { 2, 8, 3, 255 },   { 6, 20, 8, 255 },   { 140, 255, 150, 150 }, 0, spr::rgb(90, 170, 80),  spr::rgb(40, 90, 50),   false, 0.25f, 0.35f, 170 },  // Hydra: toxic green moon
+    { { 2, 6, 14, 255 },  { 6, 14, 30, 255 },  { 150, 210, 255, 170 }, 3, spr::rgb(150, 200, 240), spr::rgb(90, 140, 200), true,  0.75f, 0.28f, 230 },  // Bastion: ringed ice world
+    { { 1, 8, 9, 255 },   { 3, 18, 20, 255 },  { 120, 255, 230, 150 }, 1, spr::rgb(60, 170, 170), spr::rgb(30, 90, 110),  false, 0.20f, 0.30f, 200 },  // Mantis: teal ocean world
+    { { 6, 2, 12, 255 },  { 16, 6, 30, 255 },  { 210, 150, 255, 170 }, 1, spr::rgb(150, 90, 210), spr::rgb(80, 40, 130),  true,  0.76f, 0.30f, 270 },  // Leviathan: violet giant
+    { { 10, 1, 1, 255 },  { 26, 4, 3, 255 },   { 255, 120, 90, 160 },  0, spr::rgb(200, 60, 30),  spr::rgb(255, 150, 40),  false, 0.24f, 0.26f, 180 },  // Cataclysm: burning world
+    { { 10, 9, 6, 255 },  { 24, 20, 14, 255 }, { 255, 240, 200, 140 }, 4, spr::rgb(255, 230, 160), spr::rgb(255, 200, 120), false, 0.80f, 0.18f, 110 },  // Seraph: radiant star
+    { { 4, 0, 4, 255 },   { 14, 0, 8, 255 },   { 255, 90, 120, 150 },  5, spr::rgb(0, 0, 0),      spr::rgb(255, 150, 60),  true,  0.50f, 0.30f, 260 },  // Oblivion: black hole
+};
+static const Texture2D& planetTex(int i) {
+    if (!gfx.planetLoaded[i]) { const Theme& t = THEMES[i]; gfx.planet[i] = spr::planet(256, t.style, t.c1, t.c2, t.ring); gfx.planetLoaded[i] = true; }
+    return gfx.planet[i];
+}
+
+// ----------------------------------------------------------------------------
+//  Wave formations (one character per slot; '.' = empty)
+//  B boss  F butterfly  b bee   -- later waves swap some for darts / shielded / splitters
+// ----------------------------------------------------------------------------
+struct Formation { const char* name; std::vector<const char*> rows; };
+// wave number (0 = stage 1; 4 waves per cycle) at which each new type first appears: stage 2, stage 8, stage 14
+static const int NEW_TYPE_WAVE[3] = { 1, 5, 9 };
+static const std::vector<Formation> FORMATIONS = {
+    { "CLASSIC",  { "...BBBB...", ".FFFFFFFF.", ".FFFFFFFF.", "bbbbbbbbbb", "bbbbbbbbbb" } },
+    { "CHEVRON",  { "BF.......FB", "bFF.....FFb", ".bFF...FFb.", "..bFF.FFb..", "...bBBBb...", "....bbb...." } },
+    { "DIAMOND",  { ".....B.....", "....FBF....", "...FFbFF...", "..bbFbFbb..", ".bbbFBFbbb.", "..bbbbbbb..", "...bb.bb..." } },
+    { "TWIN PILLARS", { "BBb.....bBB", "FFb.....bFF", "FFb.....bFF", "bbb.....bbb", "bbb.....bbb", "bbb.....bbb" } },
+    { "CHECKERBOARD", { ".B.B.B.B.B.", "F.F.F.F.F.F", ".F.F.F.F.F.", "b.b.b.b.b.b", ".b.b.b.b.b.", "b.b.b.b.b.b" } },
+    { "RING",     { "...BBBBB...", "..F.....F..", ".F..bbb..F.", ".F.b.B.b.F.", ".F..bbb..F.", "..b.....b..", "...bbbbb..." } },
+    { "ARROWHEAD", { ".....B.....", "....BFB....", "...FFbFF...", "..FbbbbbF..", ".bbb...bbb.", "bbb.....bbb" } },
+    { "WINGS",    { "B.........B", "FF...B...FF", "bFF.FFF.FFb", "bbFFbbbFFbb", ".bbb...bbb." } },
+};
 
 // Draw a ship texture centred at pos, `size` logical units wide, rotated, with a soft drop shadow.
 static void drawShip(const Texture2D& t, Vector2 pos, float size, float angleDeg, bool shadow = true, Color tint = WHITE) {
@@ -170,13 +216,14 @@ static Sound makeSound(SfxKind k) {
 // ----------------------------------------------------------------------------
 //  Game objects
 // ----------------------------------------------------------------------------
-enum EType  { BEE, BUTTERFLY, BOSS };
+enum EType  { BEE, BUTTERFLY, BOSS, DART, SHIELDED, SPLITTER, MINI };
 enum EState { WAITING, ENTERING, HOMING, FORMATION, DIVING, DEAD };
 
 struct Enemy {
     EType  type;
     EState state = WAITING;
     int    col, row, hp;
+    float  sx = 0, sy = 0;      // formation slot (grid units from the formation centre)
     Vector2 pos{ 0, -100 }, prev{ 0, -100 };
     float  angle = 0, delay = 0, speed = 260, shootTimer = 0;
     std::vector<Vector2> path;
@@ -303,15 +350,16 @@ struct Game {
     bool  debugRun = false;                  // started from the Ctrl+L stage select: high score is not recorded
     bool  stageDialog = false;               // Ctrl+L debug stage-select dialog
     std::string dlgText = "1";
-    float fireworkT = 0, clearT = 0;
+    float fireworkT = 0, clearT = 0, cycleT = 0;   // cycleT: time within the current boss cycle (backdrop drift)
 
     // --- formation geometry -------------------------------------------------
-    Vector2 slotPos(int col, int row) const {
+    Vector2 slotPos(const Enemy& e) const {
         float breathe = 1.0f + 0.07f * sinf(time * 1.6f);
-        float sway    = 30.0f * sinf(time * 0.7f);
+        float sway    = 26.0f * sinf(time * 0.7f);
         float spacing = 44.0f * breathe;
-        return { W / 2.0f + sway + (col - 4.5f) * spacing, 110.0f + row * 42.0f * (0.5f + 0.5f * breathe) };
+        return { W / 2.0f + sway + e.sx * spacing, 110.0f + e.sy * 40.0f * (0.5f + 0.5f * breathe) };
     }
+    std::string formationName;
     float difficulty() const { return 1.0f + std::min(1.2f, 0.12f * (stage - 1)); }
 
     // --- setup --------------------------------------------------------------
@@ -341,6 +389,7 @@ struct Game {
 
     void nextStage() {
         ++stage;
+        if ((stage - 1) % CYCLE == 0) cycleT = 0;
         if (playerAlive) raiseShield();
         enemies.clear(); eBullets.clear(); warnings.clear();
         stageTimer = 0; bannerTimer = 2.2f; diveTimer = 3.0f;
@@ -349,41 +398,84 @@ struct Game {
         if (stageKind(stage) == SK_METEORS) { startMeteorField(); return; }
         PlaySound(sfx[SFX_STAGE]);
 
-        // Formation: row 0 bosses, rows 1-2 butterflies, rows 3-4 bees.
-        struct Slot { int c, r; };
-        std::vector<std::vector<Slot>> groups(5);
-        for (int c = 3; c <= 6; ++c) { groups[0].push_back({ c, 1 }); groups[0].push_back({ c, 2 }); }
-        for (int c = 3; c <= 6; ++c) { groups[1].push_back({ c, 0 }); }
-        for (int c : { 1, 2, 7, 8 })  { groups[1].push_back({ c, 1 }); groups[2].push_back({ c, 2 }); }
-        for (int c : { 2, 7 })        { groups[2].push_back({ c, 3 }); groups[2].push_back({ c, 4 }); }
-        for (int c = 3; c <= 6; ++c) { groups[3].push_back({ c, 3 }); groups[3].push_back({ c, 4 }); }
-        for (int c : { 0, 1, 8, 9 })  { groups[4].push_back({ c, 3 }); groups[4].push_back({ c, 4 }); }
-
-        float d = difficulty();
-        for (int g = 0; g < 5; ++g) {
-            for (size_t i = 0; i < groups[g].size(); ++i) {
-                Enemy e;
-                e.col = groups[g][i].c; e.row = groups[g][i].r;
-                e.type = e.row == 0 ? BOSS : (e.row <= 2 ? BUTTERFLY : BEE);
-                e.hp = e.type == BOSS ? 2 : 1;
-                e.delay = 1.2f + g * 2.4f / std::min(d, 1.6f) + (i / 2) * 0.15f;
-                e.speed = 330 * std::min(d, 1.5f);
-                bool mirror = (g == 0 || g == 3 || g == 4) ? (i % 2 == 1) : (g == 2);
-                e.path = entryPath(g == 1 || g == 2 ? 1 : 0, mirror);
-                e.pos = e.prev = e.path[0];
-                enemies.push_back(e);
+        // ---- build this wave: formation shape, new enemy types, entry paths
+        int cyc = cycleIndex(), waveInCycle = (stage - 1) % CYCLE, waveNo = cyc * 4 + waveInCycle;
+        const Formation& F = FORMATIONS[(waveNo == 0) ? 0 : (waveNo * 3 + 1) % FORMATIONS.size()];
+        formationName = F.name;
+        struct Slot { float x, y; EType t; };
+        std::vector<Slot> slots;
+        int nRows = (int)F.rows.size();
+        for (int r = 0; r < nRows; ++r) {
+            int w = (int)strlen(F.rows[r]);
+            for (int c = 0; c < w; ++c) {
+                char ch = F.rows[r][c];
+                if (ch == '.') continue;
+                EType t = ch == 'B' ? BOSS : (ch == 'F' ? BUTTERFLY : BEE);
+                slots.push_back({ c - (w - 1) / 2.0f, (float)r, t });
             }
+        }
+        // New enemy types arrive gradually: a couple at first, then a few more every other wave.
+        //   darts from stage 2, shielded from stage 8, splitters from stage 14 (see NEW_TYPE_WAVE)
+        auto upgrade = [&](EType from1, EType from2, EType to, int unlock, int maxN) {
+            if (waveNo < unlock) return;
+            int want = std::min(maxN, 2 + (waveNo - unlock) / 2);
+            std::vector<int> pool;
+            for (int i = 0; i < (int)slots.size(); ++i) if (slots[i].t == from1 || slots[i].t == from2) pool.push_back(i);
+            for (int i = (int)pool.size() - 1; i > 0; --i) std::swap(pool[i], pool[GetRandomValue(0, i)]);
+            for (int i = 0; i < want && i < (int)pool.size(); ++i) slots[pool[i]].t = to;
+        };
+        upgrade(BEE, BEE, DART, NEW_TYPE_WAVE[0], 10);
+        upgrade(BUTTERFLY, BUTTERFLY, SHIELDED, NEW_TYPE_WAVE[1], 8);
+        upgrade(BEE, BUTTERFLY, SPLITTER, NEW_TYPE_WAVE[2], 8);
+        // entry groups: sort by row then distance from centre, chunk into 5 groups
+        std::sort(slots.begin(), slots.end(), [](const Slot& a, const Slot& b) {
+            return a.y != b.y ? a.y < b.y : fabsf(a.x) < fabsf(b.x); });
+        int groupsN = 5, per = ((int)slots.size() + groupsN - 1) / groupsN;
+        float d = difficulty();
+        for (size_t i = 0; i < slots.size(); ++i) {
+            int g = (int)i / per, k = (int)i % per;
+            Enemy e;
+            e.sx = slots[i].x; e.sy = slots[i].y;
+            e.col = (int)lroundf(e.sx + 4.5f); e.row = (int)e.sy;
+            e.type = slots[i].t;
+            e.hp = (e.type == BOSS || e.type == SHIELDED) ? 2 : 1;
+            e.delay = 1.2f + g * 2.4f / std::min(d, 1.6f) + (k / 2) * 0.15f;
+            e.speed = 330 * std::min(d, 1.5f);
+            int kind = (waveNo + g * 2) % ENTRY_KINDS;              // every wave mixes different paths
+            bool mirror = (g % 2 == 0) ? (k % 2 == 1) : ((g / 2) % 2 == 1);
+            e.path = entryPath(kind, mirror);
+            e.pos = e.prev = e.path[0];
+            enemies.push_back(e);
         }
     }
 
+    static constexpr int ENTRY_KINDS = 6;
     std::vector<Vector2> entryPath(int kind, bool mirror) {
         auto P = [&](float x, float y) { return Vector2{ mirror ? W - x * W : x * W, y * H }; };
-        if (kind == 0) // swoop from the top, loop near the bottom
-            return buildPath({ P(.45f, -.05f), P(.45f, .30f), P(.05f, .42f), P(.20f, .62f),
-                               P(.35f, .82f), P(.60f, .60f), P(.42f, .45f) });
-        // sweep in from the side, curl up
-        return buildPath({ P(-.08f, .75f), P(.30f, .72f), P(.55f, .45f), P(.38f, .38f),
-                           P(.22f, .32f), P(.15f, .55f), P(.32f, .58f) });
+        switch (kind) {
+            case 0:  // swoop from the top, loop near the bottom
+                return buildPath({ P(.45f, -.05f), P(.45f, .30f), P(.05f, .42f), P(.20f, .62f),
+                                   P(.35f, .82f), P(.60f, .60f), P(.42f, .45f) });
+            case 1:  // sweep in from the side, curl up
+                return buildPath({ P(-.08f, .75f), P(.30f, .72f), P(.55f, .45f), P(.38f, .38f),
+                                   P(.22f, .32f), P(.15f, .55f), P(.32f, .58f) });
+            case 2:  // dive down the middle and turn a full loop-the-loop
+                return buildPath({ P(.50f, -.05f), P(.50f, .25f), P(.48f, .45f), P(.50f, .55f),
+                                   P(.52f, .70f), P(.80f, .70f), P(.80f, .50f),
+                                   P(.80f, .30f), P(.50f, .30f), P(.50f, .45f),
+                                   P(.50f, .55f), P(.40f, .50f), P(.38f, .40f) });
+            case 3:  // rise from a bottom corner and arc over
+                return buildPath({ P(-.08f, 1.02f), P(.25f, .78f), P(.08f, .45f), P(.30f, .38f),
+                                   P(.50f, .32f), P(.48f, .60f), P(.36f, .52f) });
+            case 4:  // spiral in around the screen
+                return buildPath({ P(.50f, -.05f), P(.95f, .12f), P(.95f, .66f), P(.50f, .66f),
+                                   P(.08f, .66f), P(.12f, .25f), P(.50f, .25f),
+                                   P(.76f, .25f), P(.70f, .50f), P(.50f, .45f) });
+            default: // figure-eight weave
+                return buildPath({ P(.10f, -.05f), P(.90f, .18f), P(.10f, .34f), P(.90f, .50f),
+                                   P(1.05f, .58f), P(.80f, .70f), P(.60f, .55f),
+                                   P(.40f, .40f), P(.25f, .55f), P(.40f, .45f) });
+        }
     }
 
 
@@ -594,7 +686,7 @@ struct Game {
             parts.push_back({ at, { cosf(ang) * sp, sinf(ang) * sp }, life, life, frand(1.2f, 2.2f), Color{ 120, 200, 255, 255 }, SPARK });
         }
         Enemy e;
-        e.type = type; e.hp = type == BOSS ? 2 : 1; e.col = 0; e.row = 3; e.minion = true; e.grow = 0;
+        e.type = type; e.hp = type == BOSS ? 2 : 1; e.col = 0; e.row = 3; e.sy = 3; e.minion = true; e.grow = 0;
         e.pos = e.prev = at;
         enemies.push_back(e);
         startDive(enemies.back());
@@ -928,8 +1020,11 @@ struct Game {
             p, { p.x + dir * 70, p.y - 70 }, { p.x + dir * 120, p.y + 30 }, { p.x + dir * 40, p.y + 110 },
             { p.x - dir * 20, p.y + 190 }, { tx + dir * 160, H * 0.55f }, { tx, H * 0.72f },
             { tx - dir * 70, H * 0.86f }, { tx - dir * 140, H * 0.95f }, { tx - dir * 90, H + 60.0f } });
+        if (e.type == DART) {                 // darts: short wind-up, then a near-straight strike
+            e.path = buildPath({ p, { p.x, p.y - 30 }, { tx, H * 0.45f }, { tx + frand(-40, 40), H + 60.0f } });
+        }
         e.seg = 0; e.state = DIVING;
-        e.speed = (e.type == BOSS ? 280 : 320) * difficulty();
+        e.speed = (e.type == BOSS ? 280 : e.type == DART ? 520 : e.type == MINI ? 380 : 320) * difficulty();
         e.shotsLeft = 1 + (stage >= 3 ? GetRandomValue(0, 2) : GetRandomValue(0, 1));
         e.shootTimer = frand(0.3f, 0.8f);
         PlaySound(sfx[SFX_DIVE]);
@@ -1144,7 +1239,7 @@ struct Game {
         if (IsKeyPressed(KEY_P)) paused = !paused;
         if (paused) return;
 
-        stageTimer += dt;
+        stageTimer += dt; cycleT += dt;
         bannerTimer -= dt;
         shake = std::max(0.0f, shake - dt);
 
@@ -1223,7 +1318,7 @@ struct Game {
                     if (e.seg + 1 >= e.path.size()) e.state = HOMING;
                     break;
                 case HOMING: {
-                    Vector2 target = slotPos(e.col, e.row);
+                    Vector2 target = slotPos(e);
                     Vector2 d = Vector2Subtract(target, e.pos);
                     float len = Vector2Length(d), step = e.speed * 0.9f * dt;
                     if (len <= step) { e.pos = target; e.state = FORMATION; }
@@ -1231,7 +1326,7 @@ struct Game {
                     break;
                 }
                 case FORMATION:
-                    e.pos = slotPos(e.col, e.row);
+                    e.pos = slotPos(e);
                     break;
                 case DIVING:
                     followPath(e, e.speed * dt);
@@ -1245,7 +1340,7 @@ struct Game {
                     }
                     if (e.seg + 1 >= e.path.size() && e.minion) { e.state = DEAD; break; }
                     if (e.seg + 1 >= e.path.size()) {          // left the bottom: re-enter from top
-                        Vector2 s = slotPos(e.col, e.row);
+                        Vector2 s = slotPos(e);
                         e.pos = e.prev = { s.x, -40 };
                         e.state = HOMING; e.speed = 260 * std::min(difficulty(), 1.5f);
                     }
@@ -1274,7 +1369,7 @@ struct Game {
                     if (lead->type == BOSS) {
                         int escorts = 0;
                         for (auto& e : enemies)
-                            if (escorts < 2 && e.state == FORMATION && e.row == 1 && std::abs(e.col - lead->col) <= 1) {
+                            if (escorts < 2 && e.state == FORMATION && &e != lead && fabsf(e.sy - lead->sy - 1) < 0.1f && fabsf(e.sx - lead->sx) <= 1.01f) {
                                 startDive(e); ++escorts;
                             }
                     }
@@ -1348,25 +1443,65 @@ struct Game {
         popups.erase(std::remove_if(popups.begin(), popups.end(), [](const Popup& p) { return p.life <= 0; }), popups.end());
     }
 
+    std::vector<Vector2> pendingSplits;
+    int enemyPoints(EType t, bool diving) const {
+        switch (t) {
+            case BEE: return diving ? 100 : 50;          case BUTTERFLY: return diving ? 160 : 80;
+            case BOSS: return diving ? 400 : 150;        case DART: return diving ? 240 : 120;
+            case SHIELDED: return diving ? 300 : 150;    case SPLITTER: return diving ? 200 : 100;
+            default: return 60;                          // MINI
+        }
+    }
+    Color enemyColor(EType t) const {
+        switch (t) {
+            case BEE: return YELLOW; case BUTTERFLY: return RED; case BOSS: return GREEN;
+            case DART: return Color{ 255, 80, 60, 255 }; case SHIELDED: return Color{ 90, 255, 230, 255 };
+            default: return Color{ 220, 90, 255, 255 };
+        }
+    }
+    // A destroyed splitter bursts into two small fast minis that peel away and dive
+    void releaseSplits() {
+        for (Vector2 at : pendingSplits)
+            for (int side : { -1, 1 }) {
+                Enemy m;
+                m.type = MINI; m.hp = 1; m.minion = true; m.sx = 0; m.sy = 3; m.col = 0; m.row = 3;
+                m.pos = m.prev = { at.x + side * 12.0f, at.y };
+                enemies.push_back(m);
+                startDive(enemies.back());
+            }
+        if (!pendingSplits.empty()) PlaySound(sfx[SFX_HIT]);
+        pendingSplits.clear();
+    }
+
     void collisions() {
         // Player bullets vs enemies
         for (size_t i = 0; i < pBullets.size();) {
             bool used = false;
             for (auto& e : enemies) {
                 if (e.state == DEAD || e.state == WAITING) continue;
-                if (CheckCollisionCircles(pBullets[i].pos, 7, e.pos, e.type == BOSS ? 21.f : 17.f)) {
+                float er = e.type == BOSS ? 21.f : e.type == SHIELDED ? (e.hp > 1 ? 24.f : 18.f) : e.type == MINI ? 11.f : e.type == DART ? 14.f : 17.f;
+                if (CheckCollisionCircles(pBullets[i].pos, 7, e.pos, er)) {
                     used = true; ++hits;
                     torpedoImpact(pBullets[i].pos);
-                    if (--e.hp > 0) { PlaySound(sfx[SFX_HIT]); explode(e.pos, PURPLE, WHITE, 10, 120); break; }
+                    if (--e.hp > 0) {
+                        PlaySound(sfx[SFX_HIT]);
+                        if (e.type == SHIELDED) {          // energy shield pops in a burst of cyan shards
+                            rings.push_back({ e.pos, 0.3f, 0.3f, 36, Color{ 90, 255, 240, 255 } });
+                            for (int q = 0; q < 16; ++q) {
+                                float ang = frand(0, 2 * PI), sp = frand(80, 200), life = frand(0.3f, 0.6f);
+                                parts.push_back({ Vector2Add(e.pos, { cosf(ang) * 22, sinf(ang) * 22 }), { cosf(ang) * sp, sinf(ang) * sp },
+                                                  life, life, frand(2, 3.5f), Color{ 120, 255, 240, 255 }, DEBRIS, frand(0, 360), frand(-800, 800) });
+                            }
+                        } else explode(e.pos, PURPLE, WHITE, 10, 120);
+                        break;
+                    }
                     bool diving = e.state != FORMATION;
-                    int pts = e.type == BEE ? (diving ? 100 : 50)
-                            : e.type == BUTTERFLY ? (diving ? 160 : 80)
-                            : (diving ? 400 : 150);
+                    int pts = enemyPoints(e.type, diving);
                     addScore(pts);
                     if (diving && pts >= 160) popups.push_back({ e.pos, 1.0f, std::to_string(pts) });
-                    Color c1 = e.type == BEE ? YELLOW : e.type == BUTTERFLY ? RED : GREEN;
-                    explode(e.pos, c1, WHITE, 28, 220);
+                    explode(e.pos, enemyColor(e.type), WHITE, e.type == MINI ? 14 : 28, 220);
                     e.state = DEAD;
+                    if (e.type == SPLITTER) pendingSplits.push_back(e.pos);
                     PlaySound(sfx[SFX_BOOM]);
                     break;
                 }
@@ -1386,6 +1521,7 @@ struct Game {
             }
             if (used) pBullets.erase(pBullets.begin() + i); else ++i;
         }
+        releaseSplits();
         if (!playerAlive || invuln > 0 || shieldGrace > 0) return;
         float hitR = shield ? SHIELD_RADIUS - 4 : 13;
         // Enemy bullets vs player (the force field absorbs the first hit)
@@ -1409,7 +1545,8 @@ struct Game {
         for (auto& e : enemies)
             if (e.state == DIVING && CheckCollisionCircles(e.pos, 14, player, shield ? SHIELD_RADIUS - 2 : 14)) {
                 e.state = DEAD; explode(e.pos, ORANGE, WHITE, 25, 200);
-                addScore(e.type == BOSS ? 400 : e.type == BUTTERFLY ? 160 : 100);
+                addScore(enemyPoints(e.type, true));
+                if (e.type == SPLITTER) pendingSplits.push_back(e.pos);
                 if (shield) breakShield(e.pos); else killPlayer();
                 return;
             }
@@ -1664,11 +1801,26 @@ struct Game {
         Camera2D cam{}; cam.zoom = scale; cam.offset = origin;
         if (shake > 0) cam.offset = Vector2Add(origin, { frand(-6, 6) * shake * scale, frand(-6, 6) * shake * scale });
         BeginMode2D(cam);
-        DrawRectangleGradientV(0, 0, W, H, Color{ 2, 2, 10, 255 }, Color{ 8, 4, 22, 255 });
-        {   // slowly scrolling nebula (tileable texture)
+        const Theme& th = THEMES[mode == TITLE ? 0 : cycleIndex()];
+        DrawRectangleGradientV(0, 0, W, H, th.top, th.bottom);
+        if (mode != TITLE) {   // distant body for this cycle, drifting very slowly
+            int ci = cycleIndex();
+            const Texture2D& pt = planetTex(ci);
+            float drift = fmodf(cycleT * 2.5f, H * 0.6f);
+            Vector2 pp{ th.px * W, th.py * H + drift };
+            if (th.style == 4 || th.style == 2 || th.style == 5) {
+                BeginBlendMode(BLEND_ADDITIVE);
+                Color halo = th.style == 5 ? Color{ 255, 120, 60, 50 } : Color{ 255, 220, 150, (unsigned char)(th.style == 4 ? 90 : 60) };
+                drawGlow(pp, th.size * 0.9f, halo);
+                EndBlendMode();
+            }
+            DrawTexturePro(pt, { 0, 0, (float)pt.width, (float)pt.height }, { pp.x, pp.y, th.size, th.size }, { th.size / 2, th.size / 2 }, 0,
+                           Color{ 200, 200, 210, 165 });   // a little dimmer so enemies stand out against it
+        }
+        {   // slowly scrolling nebula (tileable texture), tinted per cycle
             float scroll = fmodf(time * 6.0f, (float)H);
             Rectangle src{ 0, -scroll * gfx.nebula.height / (float)H, (float)gfx.nebula.width, (float)gfx.nebula.height };
-            DrawTexturePro(gfx.nebula, src, { 0, 0, (float)W, (float)H }, { 0, 0 }, 0, Color{ 255, 255, 255, 170 });
+            DrawTexturePro(gfx.nebula, src, { 0, 0, (float)W, (float)H }, { 0, 0 }, 0, th.neb);
         }
 
         BeginBlendMode(BLEND_ADDITIVE);
@@ -1700,9 +1852,33 @@ struct Game {
                 drawGlow(e.pos, 30 * (1 - e.grow) + 8, Color{ 120, 200, 255, (unsigned char)(200 * (1 - e.grow)) });
                 EndBlendMode();
             }
-            if (e.type == BEE)            drawShip(gfx.bee[f], e.pos, 42 * g, e.angle);
-            else if (e.type == BUTTERFLY) drawShip(gfx.fly[f], e.pos, 46 * g, e.angle);
-            else                          drawShip(e.hp < 2 ? gfx.bossDmg[f] : gfx.boss[f], e.pos, 56 * g, e.angle);
+            switch (e.type) {
+                case BEE:       drawShip(gfx.bee[f], e.pos, 42 * g, e.angle); break;
+                case BUTTERFLY: drawShip(gfx.fly[f], e.pos, 46 * g, e.angle); break;
+                case BOSS:      drawShip(e.hp < 2 ? gfx.bossDmg[f] : gfx.boss[f], e.pos, 56 * g, e.angle); break;
+                case DART: {
+                    if (e.state == DIVING) {        // afterburner streak while striking
+                        BeginBlendMode(BLEND_ADDITIVE);
+                        Vector2 v = Vector2Normalize(Vector2Subtract(e.pos, e.prev));
+                        for (int k = 1; k <= 4; ++k) drawGlow(Vector2Subtract(e.pos, Vector2Scale(v, 8.0f * k)), 9 - k * 1.5f, Color{ 255, 120, 50, (unsigned char)(180 - k * 35) });
+                        EndBlendMode();
+                    }
+                    drawShip(gfx.dart, e.pos, 40 * g, e.angle); break;
+                }
+                case SHIELDED:
+                    drawShip(gfx.shielded[f], e.pos, 44 * g, e.angle);
+                    if (e.hp > 1) {                 // projected energy shield
+                        float pl = 0.6f + 0.4f * sinf(time * 5 + e.sx);
+                        BeginBlendMode(BLEND_ADDITIVE);
+                        drawGlow(e.pos, 30, Color{ 60, 220, 255, (unsigned char)(40 + 30 * pl) });
+                        DrawRing(e.pos, 22.5f, 24.5f, 0, 360, 36, Color{ 110, 255, 240, (unsigned char)(120 + 80 * pl) });
+                        DrawPolyLinesEx(e.pos, 6, 23, time * 40, 1.0f, Color{ 150, 255, 245, (unsigned char)(70 * pl) });
+                        EndBlendMode();
+                    }
+                    break;
+                case SPLITTER: drawShip(gfx.splitter[f], e.pos, 46 * g, e.angle); break;
+                case MINI:     drawShip(gfx.splitter[f], e.pos, 26 * g, e.angle); break;
+            }
         }
 
         if ((mode == PLAYING || mode == VICTORY) && playerAlive) {
@@ -1962,7 +2138,15 @@ struct Game {
                 drawCentered(TextFormat("STAGE %d", stage), H / 2 - 60, 40, SKYBLUE);
                 drawCentered("METEOR FIELD", H / 2 - 10, 32, Color{ 230, 160, 80, 255 });
                 drawCentered(TextFormat("boss ahead:  %s", spr::bossDesigns()[cycleIndex()].name), H / 2 + 30, 16, Color{ 255, 170, 200, 255 });
-            } else drawCentered(TextFormat("STAGE %d", stage), H / 2 - 20, 40, SKYBLUE);
+            } else {
+                drawCentered(TextFormat("STAGE %d", stage), H / 2 - 40, 40, SKYBLUE);
+                drawCentered(formationName.c_str(), H / 2 + 8, 18, Color{ 170, 210, 255, 255 });
+                int wn = cycleIndex() * 4 + (stage - 1) % CYCLE;
+                const char* intro = wn == NEW_TYPE_WAVE[0] ? "NEW ENEMY: DART - strikes straight down"
+                                  : wn == NEW_TYPE_WAVE[1] ? "NEW ENEMY: SHIELDED - takes 2 hits"
+                                  : wn == NEW_TYPE_WAVE[2] ? "NEW ENEMY: SPLITTER - bursts into two minis" : nullptr;
+                if (intro) drawCentered(intro, H / 2 + 36, 15, Color{ 255, 210, 120, 255 });
+            }
         }
         if (boss.active && boss.state != B_ENTER)
             drawCentered(TextFormat("%s  -  %d / %d", boss.D().name, boss.index + 1, BOSS_COUNT), 58, 14, Color{ 255, 170, 210, 255 });

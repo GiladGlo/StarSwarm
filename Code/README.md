@@ -41,6 +41,16 @@ The title rotates between **STAR SWARM**, **Developed by Gilad Globen** and **De
 
 The game runs in 10 cycles of 6 stages: **4 alien waves → a meteor field → a boss**. Destroy the 10th boss (stage 60) to win.
 
+**Alien waves:** each wave stage uses a different formation (Classic, Chevron, Diamond, Twin Pillars, Checkerboard, Ring, Arrowhead, Wings) and mixes six entry paths (swoops, side sweeps, loop-the-loops, rises from the bottom corners, spirals and figure-eights). New enemy types arrive gradually, two at first and then one more every other wave:
+
+| Enemy | First appears | Behaviour | Points (formation / diving) |
+|---|---|---|---|
+| Dart | stage 2 | fast, near-straight strike dive | 120 / 240 |
+| Shielded | stage 8 | energy shield absorbs the first hit | 150 / 300 |
+| Splitter | stage 14 | bursts into two fast minis when destroyed | 100 / 200 |
+
+Each 6-stage cycle has its own look: sky colours, nebula tint and a distant planet, star or black hole matching that cycle's boss.
+
 **Meteor fields** (stages 5, 11, 17 … 59): large rocks drift slowly down from above for ~30 s (a little longer each cycle). There are 3 sizes, and every torpedo hit splits a rock into two of the next size down: large → 2 medium → 2 small each → dust, so a large meteor takes 7 hits to clear completely. Scoring: large 20, medium 50, small 100 per hit, plus a field-cleared bonus. Touching a rock costs your shield (or your ship). The field is kept dense, starting near 30 % screen coverage and rising to about 45 % in later fields, but never above 50 %. Some rocks have glowing magma veins. About **5 % of spawned rocks are volatile**: always the largest size, rust-copper with ember-orange fissures and a soft, slowly breathing glow. Any hit (torpedo or ramming) makes one explode instantly with no fragments (200 pts), and the blast hits every rock within 150 units exactly like a torpedo (splitting them); other volatile rocks caught in it chain-react a split second later. The blast doesn't hurt your ship.
 
 **Bosses** (stages 6, 12, 18 … 60):

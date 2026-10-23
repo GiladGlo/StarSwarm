@@ -600,6 +600,111 @@ inline Texture2D meteor(int N, int variant) {
     return render(N, P, hot ? rgb(255, 130, 90) : magma ? rgb(255, 140, 80) : rgb(170, 160, 150));
 }
 
+// ========================================================= NEW WAVE ENEMIES ==
+// DART: sleek crimson interceptor that dives straight down. Faces DOWN.
+inline Texture2D dart(int N) {
+    Vector3 red = rgb(200, 35, 45), silver = rgb(200, 205, 215), dark = rgb(50, 50, 62);
+    std::vector<Part> P;
+    P.push_back({ [](Vector2 p) { return sdPoly(M(p), { { 0.0f, -0.25f }, { 0.62f, -0.62f }, { 0.55f, -0.38f }, { 0.12f, 0.2f } }) - 0.01f; },
+                  dark, 0.08f, 0.1f, 0.05f, 0.8f, 0.7f, 0, 1,
+                  [=](Vector2 p, float d, Vector3& c, float&, float&) { if (d > -0.03f) c = red; } });
+    P.push_back({ [](Vector2 p) { return sdPoly(p, { { 0, 0.9f }, { 0.24f, -0.3f }, { 0.12f, -0.6f }, { -0.12f, -0.6f }, { -0.24f, -0.3f } }) - 0.02f; },
+                  silver, 0.2f, 0.28f, 0.14f, 0.85f, 0.85f, 0, 1,
+                  [=](Vector2 p, float, Vector3& c, float& h, float&) {
+                      if (fabsf(p.x) < 0.05f && p.y > -0.45f) { c = red; }
+                      if (fabsf(p.y - 0.15f) < 0.012f || fabsf(p.y + 0.25f) < 0.012f) { h -= 0.03f; c = Vector3Scale(c, 0.5f); }
+                  } });
+    P.push_back({ [](Vector2 p) { return sdEllipse(p, { 0, 0.32f }, { 0.07f, 0.16f }); }, rgb(255, 200, 60), 0.45f, 0.12f, 0.06f, 0.1f, 1, 0.9f });
+    P.push_back({ [](Vector2 p) { return sdEllipse(M(p), { 0.08f, -0.62f }, { 0.06f, 0.04f }); }, rgb(255, 120, 40), 0.25f, 0.04f, 0.03f, 0, 0.3f, 1.6f });
+    return render(N, P, rgb(255, 150, 150));
+}
+
+// SHIELDED: armoured beetle carrying a projected energy shield (shield drawn in-game). Faces DOWN.
+inline Texture2D shieldedBug(int N, int frame) {
+    Vector3 steel = rgb(70, 140, 150), dark = rgb(30, 60, 70), gold = rgb(210, 180, 80);
+    std::vector<Part> P;
+    float leg = frame ? 0.06f : -0.04f;
+    P.push_back({ [=](Vector2 p) { Vector2 q = M(p); float d = 10;
+                      for (int i = 0; i < 3; ++i) { float y = -0.2f + i * 0.22f;
+                          d = std::min(d, sdCapsule(q, { 0.3f, y }, { 0.62f, y + 0.12f + leg * (i - 1) }, 0.04f, 0.02f)); }
+                      return d; },
+                  dark, 0.08f, 0.06f, 0.03f, 0.6f, 0.7f });
+    P.push_back({ [](Vector2 p) { return sdEllipse(p, { 0, -0.02f }, { 0.42f, 0.5f }); },
+                  steel, 0.22f, 0.4f, 0.3f, 0.75f, 0.75f, 0, 1,
+                  [=](Vector2 p, float d, Vector3& c, float& h, float&) {
+                      Vector2 q = M(p);
+                      if (q.x < 0.012f) { h -= 0.05f; c = Vector3Scale(c, 0.4f); }
+                      float hx = sinf(q.x * 22) * sinf(p.y * 22 + q.x * 6);
+                      if (fabsf(hx) < 0.08f) { h -= 0.02f; c = Vector3Scale(c, 0.7f); }
+                      if (d > -0.035f) c = gold;
+                  } });
+    P.push_back({ [](Vector2 p) { return sdEllipse(p, { 0, 0.5f }, { 0.22f, 0.14f }); }, dark, 0.4f, 0.15f, 0.08f, 0.6f, 0.8f });
+    P.push_back({ [](Vector2 p) { return sdCircle(M(p), { 0.09f, 0.53f }, 0.05f); }, rgb(80, 255, 240), 0.55f, 0.05f, 0.03f, 0, 1, 1.4f });
+    P.push_back({ [](Vector2 p) { return sdCapsule(M(p), { 0.12f, 0.6f }, { 0.05f, 0.85f }, 0.04f, 0.01f); }, gold, 0.4f, 0.06f, 0.03f, 1, 0.9f });
+    P.push_back({ [](Vector2 p) { return sdCircle(p, { 0, -0.05f }, 0.1f); }, rgb(80, 255, 240), 0.62f, 0.1f, 0.06f, 0.1f, 1, 1.2f });
+    return render(N, P, rgb(120, 255, 240));
+}
+
+// SPLITTER: twin-lobed jelly creature with a glowing seam; splits in two when destroyed. Faces DOWN.
+inline Texture2D splitter(int N, int frame) {
+    Vector3 purple = rgb(150, 60, 205), mag = rgb(255, 80, 220);
+    float puff = frame ? 1.06f : 0.96f;
+    std::vector<Part> P;
+    P.push_back({ [=](Vector2 p) { Vector2 q = M(p); float d = 10;
+                      for (int i = 0; i < 4; ++i) { float a = (-0.6f + i * 0.35f); d = std::min(d, sdCapsule(q, { 0.25f, 0.25f }, { 0.3f + 0.25f * cosf(a), 0.6f + 0.2f * sinf(a * 3) * puff }, 0.035f, 0.012f)); }
+                      return d; },
+                  rgb(110, 40, 160), 0.05f, 0.06f, 0.03f, 0.1f, 0.8f, 0.3f, 0.85f });
+    P.push_back({ [=](Vector2 p) { return smin(sdCircle(p, { -0.24f, 0 }, 0.36f * puff), sdCircle(p, { 0.24f, 0 }, 0.36f * puff), 0.12f); },
+                  purple, 0.2f, 0.45f, 0.35f, 0.1f, 0.95f, 0.15f, 0.95f,
+                  [=](Vector2 p, float, Vector3& c, float& h, float& e) {
+                      float seam = fabsf(p.x);
+                      if (seam < 0.03f) { c = mag; e = 1.4f; h -= 0.08f; }
+                      float spots = sinf(p.x * 25) * sinf(p.y * 25);
+                      if (spots > 0.85f) c = Vector3Scale(c, 1.3f);
+                  } });
+    P.push_back({ [](Vector2 p) { return sdCircle(M(p), { 0.24f, 0.18f }, 0.075f); }, rgb(255, 250, 200), 0.6f, 0.08f, 0.05f, 0, 1, 1.0f,
+                  1, [](Vector2 p, float, Vector3& c, float&, float&) { if (Vector2Distance(M(p), { 0.24f, 0.21f }) < 0.035f) c = rgb(20, 0, 30); } });
+    return render(N, P, rgb(255, 140, 255));
+}
+
+// ================================================================ PLANETS ==
+// style: 0 rocky, 1 banded gas giant, 2 eclipsed, 3 ice, 4 star, 5 black hole
+inline Texture2D planet(int N, int style, Vector3 c1, Vector3 c2, bool ring) {
+    std::vector<Part> P;
+    const float R = 0.52f;
+    auto ringSdf = [](Vector2 p) { return fabsf(sdEllipse(p, { 0, 0 }, { 0.92f, 0.2f }, -14)) - 0.05f; };
+    Vector3 ringCol = style == 5 ? rgb(255, 150, 60) : c2;
+    float ringEm = style == 5 ? 1.6f : 0.0f;
+    if (ring || style == 5)   // back half of the ring
+        P.push_back({ [=](Vector2 p) { return rot(p, -14).y < 0 ? ringSdf(p) : 1.0f; }, ringCol, 0.02f, 0.02f, 0.02f, 0.2f, 0.4f, ringEm, 0.8f,
+                      [=](Vector2 p, float, Vector3& c, float&, float&) { float b = sinf(Vector2Length(p) * 70); c = Vector3Scale(c, 0.75f + 0.25f * b); } });
+    P.push_back({ [=](Vector2 p) { return sdCircle(p, { 0, 0 }, R); },
+                  c1, 0.0f, 1.0f, R, 0.05f, style == 3 ? 0.6f : 0.15f, style == 4 ? 1.8f : 0.0f, 1,
+                  [=](Vector2 p, float, Vector3& c, float& h, float& e) {
+                      switch (style) {
+                          case 0: {   // rocky: mottled terrain + craters
+                              float n = sinf(p.x * 9 + sinf(p.y * 7) * 2) * sinf(p.y * 8 + cosf(p.x * 6));
+                              c = mix(c1, c2, 0.5f + 0.5f * n);
+                              for (int k = 0; k < 6; ++k) { Vector2 cc{ (hash2(k, 1) - 0.5f) * 0.8f, (hash2(1, k) - 0.5f) * 0.8f };
+                                  float d = Vector2Distance(p, cc) / (0.04f + 0.06f * hash2(k, 7)); if (d < 1) c = Vector3Scale(c, 0.7f + 0.3f * d); }
+                              break; }
+                          case 1: case 3: {   // bands (gas giant) / icy bands with polar caps
+                              float b = sinf(p.y * 16 + sinf(p.x * 4 + p.y * 3) * 1.6f);
+                              c = mix(c1, c2, 0.5f + 0.5f * b);
+                              if (style == 3 && fabsf(p.y) > 0.38f) c = mix(c, rgb(240, 250, 255), 0.8f);
+                              break; }
+                          case 2: c = Vector3Scale(c1, 0.25f); break;    // eclipsed: nearly black disc, corona from rim light
+                          case 4: { float g = 0.7f + 0.3f * sinf(p.x * 20 + sinf(p.y * 15) * 2); c = Vector3Scale(c1, g); e = 1.5f; break; }
+                          case 5: c = rgb(0, 0, 0); e = 0; h = 0.0f; break;
+                      }
+                  } });
+    if (ring || style == 5)   // front half of the ring
+        P.push_back({ [=](Vector2 p) { return rot(p, -14).y >= 0 ? ringSdf(p) : 1.0f; }, ringCol, 0.6f, 0.02f, 0.02f, 0.2f, 0.4f, ringEm, 0.85f,
+                      [=](Vector2 p, float, Vector3& c, float&, float&) { float b = sinf(Vector2Length(p) * 70); c = Vector3Scale(c, 0.75f + 0.25f * b); } });
+    Vector3 rim = style == 2 ? rgb(255, 220, 140) : (style == 5 ? rgb(255, 140, 60) : Vector3Scale(c2, 0.6f));
+    return render(N, P, rim);
+}
+
 // Soft radial glow (white, alpha falloff) for particles, bullets and flashes
 inline Texture2D glow(int N) {
     Image img = GenImageColor(N, N, BLANK);
