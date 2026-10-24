@@ -30,12 +30,33 @@ The title rotates between **STAR SWARM**, **Developed by Gilad Globen** and **De
 | Key | Action |
 |---|---|
 | ← → / A D | Move |
-| Space / ↑ | Fire photon torpedoes (up to 5 on screen) |
+| Space / ↑ | Fire (hold to keep firing; each weapon has its own on-screen limit) |
 | P | Pause |
+| Esc | Pause menu: **Resume game**, **End current game** (back to the title screen) or **Exit to desktop**. Pick with ↑/↓ + Enter, keys 1–3 or the mouse; Esc again resumes. On the title screen Esc quits |
 | F11 / Alt+Enter | Toggle fullscreen |
-| Esc | Quit |
 
 **Shield:** a force field absorbs one hit (enemy fire or a ramming diver) and shatters. It regenerates when you respawn and at the start of each stage.
+
+## Couriers & the arsenal
+
+From stage 2, every alien wave has one **Courier** in its formation: an armoured cargo ship that never dives. It takes 8–12 hits (its health bar shows above it), its outer armour plates blow off at half health, and its cargo pod glows the colour of what it carries. It shoots back with the basic form of the weapon it carries (or of *your* current weapon if it carries an upgrade). When destroyed it bursts into hull fragments that fly off screen, and a hexagonal **package** falls slowly — fly into it to collect it.
+
+| Package | Effect |
+|---|---|
+| New weapon (coloured icon) | Switch to that weapon class, keeping your upgrade level |
+| Upgrade (gold chevrons) | +1 level, up to Lv3; at Lv3 it's worth 1,000 points |
+
+While you still have the Photon Torpedo, half the packages are new weapons; once you've picked up a new weapon, 80 % are upgrades.
+
+| Weapon | Behaviour | Limit (Lv0 → Lv3) |
+|---|---|---|
+| Photon Torpedo | the default; Lv2 fires 2, Lv3 fires 3 per volley | 5 → 7 volleys on screen |
+| Spread Cannon | fan of pellets, wider and denser with level | 3 → 7 pellets, 2 → 3 volleys |
+| Pulse Laser | continuous beam while held; builds heat and overheats (cool-down until the gauge drops). Lv3 pierces | beam width 4.5 → 11 |
+| Homing Swarm | mini-missiles that steer to the nearest enemy | 2 → 4 per shot, 6 → 10 on screen |
+| Ion Burst | slow orb that explodes in an area; Lv3 chains lightning to 3 more enemies | 2 → 3 orbs on screen |
+
+**Losing a life** costs one upgrade level (at Lv0 you drop back to the Photon Torpedo). **After every boss** your systems reset to the Photon Torpedo Lv0. The compact indicator next to your spare ships shows the current weapon, its level (dots) and the laser heat gauge.
 
 ## Stage structure, meteor fields, bosses & victory
 
@@ -74,7 +95,7 @@ Bosses get more aggressive as their health bar drops (pink → orange → red). 
 
 ## Debug stage select
 
-On the title screen press **Ctrl+L** to open a dialog and start at any stage (1–60). Type a number, use ↑/↓ (±1) or ←/→ / « » (jump between boss stages), or click the buttons; **Enter** starts, **Esc** cancels. Debug runs show a *DEBUG* tag and don't record a high score.
+On the title screen press **Ctrl+L** to open a dialog and start at any stage (1–60). Type a number, use ↑/↓ (±1) or ←/→ / « » (jump between boss stages), or click the buttons; **Enter** starts, **Esc** cancels. Debug runs show a *DEBUG* tag and don't record a high score. During a debug run, keys **1–5** select a weapon and **+ / −** change its level.
 
 ## Scoring
 

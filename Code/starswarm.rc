@@ -1,0 +1,3 @@
+// Application icon. GLFW looks for a resource named GLFW_ICON, so the same icon
+// is used for the .exe in Explorer and for the game window / taskbar.
+GLFW_ICON ICON "starswarm.ico"

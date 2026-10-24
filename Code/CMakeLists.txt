@@ -24,6 +24,7 @@ add_executable(starswarm main.cpp)
 target_link_libraries(starswarm PRIVATE raylib)
 
 if(WIN32)
+  target_sources(starswarm PRIVATE starswarm.rc)   # exe + window icon (starswarm.ico)
   # No console window in Release builds on Windows
   set_target_properties(starswarm PROPERTIES WIN32_EXECUTABLE $<CONFIG:Release>)
   if(MSVC)

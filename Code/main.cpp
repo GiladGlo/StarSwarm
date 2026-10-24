@@ -52,6 +52,7 @@ struct Gfx {
     static constexpr int BOSS_N = 384;
     Texture2D meteor[7]{};                             // [6] = volatile (explosive) rock
     Texture2D dart{}, shielded[2]{}, splitter[2]{};    // later-wave enemy types
+    Texture2D courier[2]{};                            // [1] = armour blown off
     Texture2D planet[10]{};                            // one backdrop body per boss cycle
     bool planetLoaded[10]{};
     Texture2D bossTex[10]{};
@@ -73,6 +74,7 @@ struct Gfx {
         }
         for (int i = 0; i < 7; ++i) meteor[i] = spr::meteor(192, i);
         dart = spr::dart(N);
+        courier[0] = spr::courier(N, false); courier[1] = spr::courier(N, true);
         for (int f = 0; f < 2; ++f) { shielded[f] = spr::shieldedBug(N, f); splitter[f] = spr::splitter(N, f); }
         glow = spr::glow(64);
         nebula = spr::nebula(300, 400);
@@ -82,7 +84,7 @@ struct Gfx {
             UnloadTexture(*t);
         for (int i = 0; i < 10; ++i) if (bossLoaded[i]) UnloadTexture(bossTex[i]);
         for (auto& m : meteor) UnloadTexture(m);
-        for (Texture2D* t : { &dart, &shielded[0], &shielded[1], &splitter[0], &splitter[1] }) UnloadTexture(*t);
+        for (Texture2D* t : { &dart, &shielded[0], &shielded[1], &splitter[0], &splitter[1], &courier[0], &courier[1] }) UnloadTexture(*t);
         for (int i = 0; i < 10; ++i) if (planetLoaded[i]) UnloadTexture(planet[i]);
     }
 };
@@ -136,6 +138,48 @@ static void drawShip(const Texture2D& t, Vector2 pos, float size, float angleDeg
     DrawTexturePro(t, src, { pos.x, pos.y, size, size }, { size / 2, size / 2 }, angleDeg, tint);
 }
 
+static void drawGlow(Vector2 pos, float radius, Color c);
+// ---- Player weapon classes (picked up from Courier packages) ----------------
+enum WClass { W_PHOTON, W_SPREAD, W_PULSE, W_HOMING, W_ION, W_COUNT };
+static const char* WNAME[W_COUNT] = { "PHOTON TORPEDO", "SPREAD CANNON", "PULSE LASER", "HOMING SWARM", "ION BURST" };
+static const Color WCOL[W_COUNT] = { { 255, 110, 50, 255 }, { 255, 160, 40, 255 }, { 70, 220, 255, 255 }, { 110, 255, 120, 255 }, { 190, 110, 255, 255 } };
+static const Color UPG_COL = { 255, 215, 60, 255 };
+// Weapon icons for packages and the HUD indicator. k: 0 photon 1 spread 2 pulse 3 homing 4 ion 5 upgrade
+static void weaponIcon(int k, Vector2 c, float s, Color col) {
+    float w = s * 0.12f;
+    switch (k) {
+        case 0: drawGlow(c, s * 0.5f, col); DrawCircleV(c, s * 0.22f, WHITE); break;
+        case 1: for (int i = -1; i <= 1; i++) { float a = (-90 + i * 28) * DEG2RAD;
+                    DrawLineEx({ c.x, c.y + s * 0.38f }, { c.x + cosf(a) * s * 0.55f, c.y + s * 0.38f + sinf(a) * s * 0.75f }, w, WHITE); } break;
+        case 2: DrawRectangleRounded({ c.x - w * 0.9f, c.y - s * 0.42f, w * 1.8f, s * 0.84f }, 1, 6, WHITE); break;
+        case 3: { DrawRing({ c.x + s * 0.1f, c.y + s * 0.1f }, s * 0.26f, s * 0.26f + w, 180, 330, 16, WHITE);
+                  Vector2 t{ c.x + s * 0.1f + s * 0.32f * cosf(330 * DEG2RAD), c.y + s * 0.1f + s * 0.32f * sinf(330 * DEG2RAD) };
+                  Vector2 a{ t.x + s * 0.16f, t.y - s * 0.06f }, b{ t.x - s * 0.12f, t.y - s * 0.12f }, d{ t.x - s * 0.02f, t.y + s * 0.14f };
+                  DrawTriangle(a, b, d, WHITE); DrawTriangle(a, d, b, WHITE); break; }
+        case 4: { Vector2 z[6] = { { c.x + s * 0.08f, c.y - s * 0.45f }, { c.x - s * 0.18f, c.y + s * 0.02f }, { c.x + s * 0.04f, c.y + s * 0.02f },
+                                   { c.x - s * 0.1f, c.y + s * 0.45f }, { c.x + s * 0.2f, c.y - s * 0.08f }, { c.x - s * 0.02f, c.y - s * 0.08f } };
+                  for (int i = 0; i < 5; i++) { DrawLineEx(z[i], z[i + 1], w, WHITE); }
+                  break; }
+        default: for (int i = 0; i < 2; i++) { float y = c.y + s * 0.12f - i * s * 0.32f;
+                    DrawLineEx({ c.x - s * 0.32f, y + s * 0.2f }, { c.x, y - s * 0.08f }, w * 1.2f, WHITE);
+                    DrawLineEx({ c.x, y - s * 0.08f }, { c.x + s * 0.32f, y + s * 0.2f }, w * 1.2f, WHITE); } break;
+    }
+}
+// Falling package: spinning hexagonal pod in the content colour, icon in the middle, orbiting beacons
+static void drawPackage(int content, Vector2 c, float s, float t) {
+    Color col = content >= 0 ? WCOL[content] : UPG_COL;
+    float pl = 0.6f + 0.4f * sinf(t * 6);
+    BeginBlendMode(BLEND_ADDITIVE); drawGlow(c, s * 1.3f, Color{ col.r, col.g, col.b, (unsigned char)(90 + 70 * pl) }); EndBlendMode();
+    DrawPoly(c, 6, s * 0.62f, t * 40, Color{ 30, 30, 45, 255 });
+    DrawPolyLinesEx(c, 6, s * 0.62f, t * 40, s * 0.06f, col);
+    DrawPolyLinesEx(c, 6, s * 0.5f, t * 40, s * 0.02f, Color{ col.r, col.g, col.b, 150 });
+    DrawCircleV(c, s * 0.36f, Color{ (unsigned char)(col.r / 3), (unsigned char)(col.g / 3), (unsigned char)(col.b / 3), 255 });
+    weaponIcon(content >= 0 ? content : 5, c, s * 0.5f, col);
+    for (int i = 0; i < 3; i++) {
+        float a = (t * 120 + i * 120) * DEG2RAD; Vector2 b{ c.x + cosf(a) * s * 0.75f, c.y + sinf(a) * s * 0.75f };
+        BeginBlendMode(BLEND_ADDITIVE); drawGlow(b, s * 0.12f, col); EndBlendMode(); DrawCircleV(b, s * 0.035f, WHITE);
+    }
+}
 static void drawGlow(Vector2 pos, float radius, Color c) {
     DrawTexturePro(gfx.glow, { 0, 0, (float)gfx.glow.width, (float)gfx.glow.height },
                    { pos.x, pos.y, radius * 2, radius * 2 }, { radius, radius }, 0, c);
@@ -216,7 +260,7 @@ static Sound makeSound(SfxKind k) {
 // ----------------------------------------------------------------------------
 //  Game objects
 // ----------------------------------------------------------------------------
-enum EType  { BEE, BUTTERFLY, BOSS, DART, SHIELDED, SPLITTER, MINI };
+enum EType  { BEE, BUTTERFLY, BOSS, DART, SHIELDED, SPLITTER, MINI, COURIER };
 enum EState { WAITING, ENTERING, HOMING, FORMATION, DIVING, DEAD };
 
 struct Enemy {
@@ -231,12 +275,21 @@ struct Enemy {
     int    shotsLeft = 0;
     bool   minion = false;      // launched by the dreadnought; never returns to formation
     float  grow = 1;            // 0->1 as a launched fighter emerges from its hatch
+    int    maxHp = 1;
+    int    cargo = -1;          // COURIER: weapon class it carries (W_SPREAD..W_ION) or -1 = upgrade
+    float  fireT = 0;           // COURIER: time to its next shot
+    bool   armourOff = false;   // COURIER: outer plates already blown off
 };
 
 // Enemy projectile kinds (boss weapons get their own look)
-enum BKind { BK_ENEMY = 0, BK_ORB = 1, BK_MISSILE = 2, BK_METEOR = 3, BK_BOLT = 4, BK_SPIRAL = 5, BK_CRYSTAL = 6 };
+enum BKind { BK_ENEMY = 0, BK_ORB = 1, BK_MISSILE = 2, BK_METEOR = 3, BK_BOLT = 4, BK_SPIRAL = 5, BK_CRYSTAL = 6,
+             BK_C_SPREAD = 7, BK_C_PULSE = 8, BK_C_HOMING = 9, BK_C_ION = 10, BK_C_PHOTON = 11 };   // 7+: Courier shots
+
+enum PBKind { PB_PHOTON = 0, PB_SPREAD = 1, PB_HOMING = 3, PB_ION = 4 };   // player projectile kinds
+struct Package   { Vector2 pos; int content; float t; };   // content: W_SPREAD..W_ION, or -1 = upgrade
+struct Lightning { Vector2 a, b; float life; unsigned seed; };
 struct Bullet   { Vector2 pos, vel; int kind = 0; float age = 0; float aux = 0; };   // aux: hue (spiral) / rock variant (meteor)
-enum PKind { SPARK, FLASH, SMOKE, DEBRIS, TRAIL, EMBER };
+enum PKind { SPARK, FLASH, SMOKE, DEBRIS, TRAIL, EMBER, HULL };   // HULL: debris with no drag (flies off screen)
 struct Particle { Vector2 pos, vel; float life, maxLife, size; Color col; PKind kind = SPARK; float rot = 0, spin = 0; };
 struct Ring     { Vector2 pos; float life, maxLife, radius; Color col; };
 struct Warning  { float x, t; };                         // Meteor Storm entry marker
@@ -329,6 +382,12 @@ struct Game {
     std::vector<Particle> parts;
     std::vector<Ring>     rings;
     std::vector<Warning>  warnings;
+    std::vector<Package>  packages;
+    std::vector<Lightning> zaps;
+    int   weapon = W_PHOTON, wlevel = 0;        // current weapon class and upgrade level (0..3)
+    float heat = 0, laserTick = 0, laserTop = 0;
+    bool  overheated = false, laserOn = false;
+    bool  autoFire = false;                     // selftest: hold the trigger
     std::vector<Meteor>   meteors;
     bool  meteorField = false;
     int   nextMeteorId = 1;
@@ -347,6 +406,9 @@ struct Game {
     int   shotsFired = 0, hits = 0;
     float time = 0, stageTimer = 0, bannerTimer = 0, diveTimer = 0, shake = 0;
     bool  paused = false;
+    bool  escMenu = false;                      // ESC pause menu open
+    int   escSel = 0;                           // highlighted option (0 resume, 1 end game, 2 exit)
+    bool  quitRequested = false;                // 'Exit to desktop' chosen
     bool  debugRun = false;                  // started from the Ctrl+L stage select: high score is not recorded
     bool  stageDialog = false;               // Ctrl+L debug stage-select dialog
     std::string dlgText = "1";
@@ -377,6 +439,7 @@ struct Game {
         lives = 3; score = 0; stage = std::clamp(startStage, 1, FINAL_STAGE) - 1; nextLifeAt = 20000; shotsFired = hits = 0;
         playerAlive = true; player = { W / 2.0f, H - 70.0f }; invuln = 0;
         pBullets.clear(); eBullets.clear(); parts.clear(); rings.clear(); popups.clear(); meteors.clear(); meteorField = false;
+        packages.clear(); zaps.clear(); weapon = W_PHOTON; wlevel = 0; heat = 0; overheated = false;
         mode = PLAYING; shield = false; boss.active = false;
         nextStage();
     }
@@ -427,6 +490,14 @@ struct Game {
         upgrade(BEE, BEE, DART, NEW_TYPE_WAVE[0], 10);
         upgrade(BUTTERFLY, BUTTERFLY, SHIELDED, NEW_TYPE_WAVE[1], 8);
         upgrade(BEE, BUTTERFLY, SPLITTER, NEW_TYPE_WAVE[2], 8);
+        // One Courier per wave from stage 2: takes a central non-boss slot near the top
+        if (waveNo >= 1) {
+            int best = -1;
+            for (int i = 0; i < (int)slots.size(); ++i)
+                if (slots[i].t != BOSS && (best < 0 || slots[i].y < slots[best].y - 0.1f ||
+                    (fabsf(slots[i].y - slots[best].y) < 0.1f && fabsf(slots[i].x) < fabsf(slots[best].x)))) best = i;
+            if (best >= 0) slots[best].t = COURIER;
+        }
         // entry groups: sort by row then distance from centre, chunk into 5 groups
         std::sort(slots.begin(), slots.end(), [](const Slot& a, const Slot& b) {
             return a.y != b.y ? a.y < b.y : fabsf(a.x) < fabsf(b.x); });
@@ -439,6 +510,15 @@ struct Game {
             e.col = (int)lroundf(e.sx + 4.5f); e.row = (int)e.sy;
             e.type = slots[i].t;
             e.hp = (e.type == BOSS || e.type == SHIELDED) ? 2 : 1;
+            if (e.type == COURIER) {
+                e.hp = 8 + std::min(4, cyc);
+                // what it carries: 50/50 while on the basic weapon, 80% upgrades once you hold a new weapon
+                float pWeapon = weapon == W_PHOTON ? 0.5f : 0.2f;
+                if (frand(0, 1) < pWeapon) { do { e.cargo = GetRandomValue(W_SPREAD, W_ION); } while (e.cargo == weapon); }
+                else e.cargo = -1;
+                e.fireT = frand(2.5f, 3.5f);
+            }
+            e.maxHp = e.hp;
             e.delay = 1.2f + g * 2.4f / std::min(d, 1.6f) + (k / 2) * 0.15f;
             e.speed = 330 * std::min(d, 1.5f);
             int kind = (waveNo + g * 2) % ENTRY_KINDS;              // every wave mixes different paths
@@ -723,6 +803,10 @@ struct Game {
                 rings.push_back({ b.core(), 0.9f, 0.9f, 260, Color{ 255, 120, 220, 255 } });
                 rings.push_back({ b.core(), 0.6f, 0.6f, 160, Color{ 255, 230, 180, 255 } });
                 shake = 1.0f;
+                if (weapon != W_PHOTON || wlevel > 0) {   // after every boss the arsenal resets to the basic weapon
+                    weapon = W_PHOTON; wlevel = 0; heat = 0; overheated = false;
+                    popups.push_back({ { W / 2.0f - 120, b.pos.y + 40 }, 2.5f, "SYSTEMS RESET - PHOTON TORPEDO" });
+                }
                 int bonus = 5000 * (b.index + 1);
                 addScore(bonus);
                 popups.push_back({ { W / 2.0f - 130, b.pos.y }, 2.5f, TextFormat("%s DESTROYED  +%d", b.D().name, bonus) });
@@ -1099,6 +1183,9 @@ struct Game {
 
     void killPlayer() {
         shield = false;
+        // losing a life costs one upgrade level; with none left you drop back to the basic Photon Torpedo
+        if (wlevel > 0) --wlevel; else weapon = W_PHOTON;
+        heat = 0; overheated = false; laserOn = false;
         playerAlive = false; respawnTimer = 2.5f; shake = 0.6f; --lives;
         explode(player, WHITE, RED, 80, 320);
         explode(player, YELLOW, ORANGE, 40, 200);
@@ -1197,9 +1284,66 @@ struct Game {
         drawCentered("ENTER start     ESC cancel", box.y + box.height - 30, 13, GRAY);
     }
 
+    // --- ESC pause menu -------------------------------------------------------
+    static constexpr int ESC_N = 3;
+    Rectangle escBox() const { return { 110, 255, W - 220.0f, 300 }; }
+    Rectangle escBtn(int i) const { return { 150, 330 + i * 64.0f, W - 300.0f, 50 }; }
+    void openEscMenu() { escMenu = true; escSel = 0; paused = false; while (GetCharPressed()) {} }
+    void escChoose(int i) {
+        escMenu = false;
+        if (i == 1) {   // end current game -> back to the title screen
+            if (!debugRun && score > hiScore) hiScore = score;
+            saveHiScore();
+            enemies.clear(); pBullets.clear(); eBullets.clear(); parts.clear(); rings.clear(); warnings.clear();
+            packages.clear(); zaps.clear(); meteors.clear(); popups.clear(); pendingSplits.clear();
+            boss.active = false; meteorField = false; shake = 0;
+            mode = TITLE; titleT = 0; paused = false;
+        } else if (i == 2) {   // exit to desktop
+            if (mode != TITLE && !debugRun && score > hiScore) hiScore = score;
+            saveHiScore();
+            quitRequested = true;
+        }
+    }
+    void updateEscMenu() {
+        if (IsKeyPressed(KEY_UP) || IsKeyPressed(KEY_W) || IsKeyPressedRepeat(KEY_UP))     escSel = (escSel + ESC_N - 1) % ESC_N;
+        if (IsKeyPressed(KEY_DOWN) || IsKeyPressed(KEY_S) || IsKeyPressedRepeat(KEY_DOWN)) escSel = (escSel + 1) % ESC_N;
+        for (int i = 0; i < ESC_N; ++i) if (IsKeyPressed((KeyboardKey)(KEY_ONE + i)) || IsKeyPressed((KeyboardKey)(KEY_KP_1 + i))) { escChoose(i); return; }
+        if (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_KP_ENTER) || IsKeyPressed(KEY_SPACE)) { escChoose(escSel); return; }
+        Vector2 m = mouseLogical();
+        Vector2 md = GetMouseDelta();
+        for (int i = 0; i < ESC_N; ++i) if (CheckCollisionPointRec(m, escBtn(i))) {
+            if (md.x != 0 || md.y != 0) escSel = i;
+            if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) { escChoose(i); return; }
+        }
+    }
+    void drawEscMenuShapes() {
+        DrawRectangle(0, 0, W, H, Color{ 0, 0, 0, 170 });
+        Rectangle box = escBox();
+        DrawRectangleRounded(box, 0.07f, 10, Color{ 18, 20, 44, 245 });
+        DrawRectangleRoundedLinesEx(box, 0.07f, 10, 2, Color{ 90, 180, 255, 200 });
+        Color base[ESC_N] = { { 30, 110, 70, 255 }, { 60, 70, 120, 255 }, { 110, 40, 50, 255 } };
+        for (int i = 0; i < ESC_N; ++i) {
+            drawButton(escBtn(i), i == escSel, base[i]);
+            if (i == escSel) DrawRectangleRoundedLinesEx(escBtn(i), 0.3f, 8, 2.5f, Color{ 255, 230, 120, 230 });
+        }
+    }
+    void drawEscMenuText() {
+        Rectangle box = escBox();
+        drawCentered("PAUSED", box.y + 22, 30, YELLOW);
+        const char* lbl[ESC_N] = { "1   RESUME GAME", "2   END CURRENT GAME", "3   EXIT TO DESKTOP" };
+        for (int i = 0; i < ESC_N; ++i) {
+            Rectangle r = escBtn(i);
+            float fs = 20 * scale, sp = customFont ? fs * 0.04f : fs / 10;
+            Vector2 d = MeasureTextEx(font, lbl[i], fs, sp);
+            DrawTextEx(font, lbl[i], { origin.x + (r.x + r.width / 2) * scale - d.x / 2, origin.y + (r.y + r.height / 2) * scale - d.y / 2 }, fs, sp, RAYWHITE);
+        }
+        drawCentered("UP/DOWN select    ENTER confirm    ESC resume", box.y + box.height - 30, 13, GRAY);
+    }
+
     // --- update -------------------------------------------------------------
     void update(float dt) {
         time += dt;
+        if (escMenu) { updateEscMenu(); return; }
         for (auto& s : stars) { s.pos.y += s.speed * dt * (mode == PLAYING ? 1.0f : 0.5f);
                                 if (s.pos.y > H) { s.pos.y = 0; s.pos.x = frand(0, W); } }
         updateParticles(dt);
@@ -1247,13 +1391,14 @@ struct Game {
         updateEnemies(dt);
         updateBoss(dt);
         updateMeteors(dt);
+        updatePackages(dt);
         updateBullets(dt);
         collisions();
 
         // Stage clear?
         bool anyAlive = std::any_of(enemies.begin(), enemies.end(), [](const Enemy& e) { return e.state != DEAD; });
         // (a short pause after the last kill so explosions can play out; torpedo trails don't block it)
-        if (mode == PLAYING && !anyAlive && !boss.active && !meteorField && meteors.empty()) {
+        if (mode == PLAYING && !anyAlive && !boss.active && !meteorField && meteors.empty() && packages.empty()) {
             clearT += dt;
             if (clearT > 1.6f) { clearT = 0; nextStage(); }
         } else clearT = 0;
@@ -1279,13 +1424,29 @@ struct Game {
         if (IsKeyDown(KEY_RIGHT) || IsKeyDown(KEY_D)) mv += 1;
         player.x = Clamp(player.x + mv * 340 * dt, 24, W - 24);
 
-        fireCooldown -= dt;
-        if ((IsKeyPressed(KEY_SPACE) || IsKeyPressed(KEY_UP)) && fireCooldown <= 0 && pBullets.size() < MAX_TORPEDOES) {
-            pBullets.push_back({ { player.x, player.y - 26 }, { 0, -640 } });
-            parts.push_back({ { player.x, player.y - 26 }, { 0, 0 }, 0.12f, 0.12f, 22, Color{ 255, 150, 70, 255 }, FLASH });
-            fireCooldown = 0.12f; ++shotsFired;
-            PlaySound(sfx[SFX_SHOOT]);
+        // debug runs: 1-5 pick a weapon, +/- change its level
+        if (debugRun) {
+            for (int k = 0; k < W_COUNT; ++k) if (IsKeyPressed((KeyboardKey)(KEY_ONE + k))) { weapon = k; heat = 0; overheated = false; }
+            if (IsKeyPressed(KEY_EQUAL) || IsKeyPressed(KEY_KP_ADD)) wlevel = std::min(3, wlevel + 1);
+            if (IsKeyPressed(KEY_MINUS) || IsKeyPressed(KEY_KP_SUBTRACT)) wlevel = std::max(0, wlevel - 1);
         }
+        fireCooldown -= dt;
+        bool trigger = IsKeyDown(KEY_SPACE) || IsKeyDown(KEY_UP) || autoFire;   // hold to keep firing
+        laserOn = false;
+        if (weapon == W_PULSE) {
+            static const float rate[4] = { 0.5f, 0.42f, 0.36f, 0.3f };   // heat per second of firing (~2 s at Lv0)
+            if (trigger && !overheated) {
+                laserOn = true;
+                heat += rate[wlevel] * dt;
+                if (heat >= 1) { heat = 1; overheated = true; PlaySound(sfx[SFX_HIT]); }
+                updateLaser(dt);
+            } else {
+                heat = std::max(0.0f, heat - dt * (overheated ? 0.8f : 1.2f));
+                if (overheated && heat <= 0.25f) overheated = false;
+                if (overheated && GetRandomValue(0, 3) == 0) { float life = frand(0.4f, 0.7f);
+                    parts.push_back({ { player.x, player.y - 26 }, { frand(-10, 10), frand(-40, -20) }, life, life, 6, Color{ 120, 120, 130, 255 }, SMOKE }); }
+            }
+        } else if (trigger && fireCooldown <= 0) firePlayerWeapon();
     }
 
     void followPath(Enemy& e, float dist) {
@@ -1327,6 +1488,10 @@ struct Game {
                 }
                 case FORMATION:
                     e.pos = slotPos(e);
+                    if (e.type == COURIER && mode == PLAYING && playerAlive) {
+                        e.fireT -= dt;
+                        if (e.fireT <= 0) { courierFire(e); e.fireT = frand(1.7f, 2.6f) / std::min(difficulty(), 1.5f); }
+                    }
                     break;
                 case DIVING:
                     followPath(e, e.speed * dt);
@@ -1361,7 +1526,7 @@ struct Game {
             int maxDivers = 2 + std::min(4, stage / 2);
             if (diveTimer <= 0 && divingCount < maxDivers) {
                 std::vector<Enemy*> pool;
-                for (auto& e : enemies) if (e.state == FORMATION) pool.push_back(&e);
+                for (auto& e : enemies) if (e.state == FORMATION && e.type != COURIER) pool.push_back(&e);   // couriers never dive
                 if (!pool.empty()) {
                     Enemy* lead = pool[GetRandomValue(0, (int)pool.size() - 1)];
                     startDive(*lead);
@@ -1369,7 +1534,7 @@ struct Game {
                     if (lead->type == BOSS) {
                         int escorts = 0;
                         for (auto& e : enemies)
-                            if (escorts < 2 && e.state == FORMATION && &e != lead && fabsf(e.sy - lead->sy - 1) < 0.1f && fabsf(e.sx - lead->sx) <= 1.01f) {
+                            if (escorts < 2 && e.state == FORMATION && e.type != COURIER && &e != lead && fabsf(e.sy - lead->sy - 1) < 0.1f && fabsf(e.sx - lead->sx) <= 1.01f) {
                                 startDive(e); ++escorts;
                             }
                     }
@@ -1384,12 +1549,40 @@ struct Game {
 
     void updateBullets(float dt) {
         for (auto& b : pBullets) {
-            b.pos = Vector2Add(b.pos, Vector2Scale(b.vel, dt));
-            for (int k = 0; k < 3; ++k) {   // energy wake
-                float life = frand(0.18f, 0.35f);
-                parts.push_back({ Vector2Add(b.pos, { frand(-3, 3), frand(4, 10) }), { frand(-18, 18), frand(10, 50) },
-                                  life, life, frand(3, 6), GetRandomValue(0, 2) ? Color{ 255, 90, 40, 255 } : Color{ 255, 200, 120, 255 }, TRAIL });
+            b.age += dt;
+            if (b.kind == PB_HOMING) {          // steer toward the nearest target
+                static const float turnR[4] = { 3.5f, 5.0f, 5.0f, 6.0f };
+                Vector2 tgt{ -1, -1 }; float best = 1e9f;
+                for (auto& e : enemies) {
+                    if (e.state == DEAD || e.state == WAITING) continue;
+                    float d = Vector2Distance(e.pos, b.pos); if (e.pos.y < b.pos.y + 40 && d < best) { best = d; tgt = e.pos; } }
+                if (boss.active && boss.state == B_FIGHT) { float d = Vector2Distance(boss.core(), b.pos); if (d < best) { best = d; tgt = boss.core(); } }
+                for (auto& m : meteors) { float d = Vector2Distance(m.pos, b.pos); if (m.pos.y < b.pos.y + 40 && d < best) { best = d; tgt = m.pos; } }
+                float cur = atan2f(b.vel.y, b.vel.x);
+                if (tgt.x >= 0) {
+                    float want = atan2f(tgt.y - b.pos.y, tgt.x - b.pos.x);
+                    float d = fmodf(want - cur + 3 * PI, 2 * PI) - PI, turn = turnR[wlevel] * dt;
+                    cur += std::clamp(d, -turn, turn);
+                }
+                float sp = std::min(560.0f, Vector2Length(b.vel) + 500 * dt);
+                b.vel = { cosf(cur) * sp, sinf(cur) * sp };
+                float life = frand(0.18f, 0.3f);
+                parts.push_back({ b.pos, { frand(-8, 8), frand(-8, 8) }, life, life, frand(2.5f, 4), WCOL[W_HOMING], TRAIL });
+                if (b.age > 3.0f) b.pos.y = -100;
+            } else if (b.kind == PB_PHOTON) {
+                for (int k = 0; k < 3; ++k) {   // energy wake
+                    float life = frand(0.18f, 0.35f);
+                    parts.push_back({ Vector2Add(b.pos, { frand(-3, 3), frand(4, 10) }), { frand(-18, 18), frand(10, 50) },
+                                      life, life, frand(3, 6), GetRandomValue(0, 2) ? Color{ 255, 90, 40, 255 } : Color{ 255, 200, 120, 255 }, TRAIL });
+                }
+            } else if (b.kind == PB_SPREAD) {
+                if (GetRandomValue(0, 1)) { float life = frand(0.12f, 0.22f);
+                    parts.push_back({ b.pos, { 0, 0 }, life, life, 3.5f, WCOL[W_SPREAD], TRAIL }); }
+            } else if (b.kind == PB_ION) {
+                if (GetRandomValue(0, 1)) { float life = frand(0.15f, 0.3f), a = frand(0, 2 * PI);
+                    parts.push_back({ b.pos, { cosf(a) * 60, sinf(a) * 60 }, life, life, frand(1, 1.8f), WCOL[W_ION], SPARK }); }
             }
+            b.pos = Vector2Add(b.pos, Vector2Scale(b.vel, dt));
         }
         for (auto& b : eBullets) {
             b.age += dt;
@@ -1410,6 +1603,19 @@ struct Game {
                     explode(b.pos, Color{ 255, 150, 50, 255 }, YELLOW, 14, 170);
                     b.pos.y = H + 100;             // removed below
                 }
+            } else if (b.kind == BK_C_HOMING) {    // courier's seeker
+                if (b.age < 2.0f && playerAlive) {
+                    float cur = atan2f(b.vel.y, b.vel.x), want = atan2f(player.y - b.pos.y, player.x - b.pos.x);
+                    float d = fmodf(want - cur + 3 * PI, 2 * PI) - PI, turn = 2.0f * dt;
+                    cur += std::clamp(d, -turn, turn);
+                    float sp = std::min(230.0f, Vector2Length(b.vel) + 50 * dt);
+                    b.vel = { cosf(cur) * sp, sinf(cur) * sp };
+                }
+                if (GetRandomValue(0, 1)) { float life = frand(0.15f, 0.3f);
+                    parts.push_back({ b.pos, { frand(-8, 8), frand(-8, 8) }, life, life, frand(2, 3.5f), WCOL[W_HOMING], TRAIL }); }
+            } else if (b.kind == BK_C_ION && GetRandomValue(0, 2) == 0) {
+                float life = frand(0.15f, 0.3f), a = frand(0, 2 * PI);
+                parts.push_back({ b.pos, { cosf(a) * 50, sinf(a) * 50 }, life, life, frand(1, 1.6f), WCOL[W_ION], SPARK });
             } else if (b.kind == BK_SPIRAL) {      // ribbon trail so the spiral arms read as curves
                 float life = 0.32f;
                 parts.push_back({ b.pos, { 0, 0 }, life, life, 4.5f, spiralColor(b.aux), TRAIL });
@@ -1425,14 +1631,14 @@ struct Game {
                                                (float)GetRandomValue(0, 5) });
         }
         warnings.erase(std::remove_if(warnings.begin(), warnings.end(), [](const Warning& w) { return w.t <= 0; }), warnings.end());
-        pBullets.erase(std::remove_if(pBullets.begin(), pBullets.end(), [](const Bullet& b) { return b.pos.y < -20; }), pBullets.end());
+        pBullets.erase(std::remove_if(pBullets.begin(), pBullets.end(), [](const Bullet& b) { return b.pos.y < -20 || b.pos.x < -30 || b.pos.x > W + 30 || b.pos.y > H + 30; }), pBullets.end());
         eBullets.erase(std::remove_if(eBullets.begin(), eBullets.end(), [](const Bullet& b) { return b.pos.y > H + 20 || b.pos.y < -40 || b.pos.x < -40 || b.pos.x > W + 40; }), eBullets.end());
     }
 
     void updateParticles(float dt) {
         for (auto& p : parts) {
             p.pos = Vector2Add(p.pos, Vector2Scale(p.vel, dt));
-            p.vel = Vector2Scale(p.vel, p.kind == SMOKE ? 0.95f : 0.97f);
+            if (p.kind != HULL) p.vel = Vector2Scale(p.vel, p.kind == SMOKE ? 0.95f : 0.97f);
             if (p.kind == SMOKE) p.pos.y += 12 * dt;
             p.rot += p.spin * dt; p.life -= dt;
         }
@@ -1443,12 +1649,280 @@ struct Game {
         popups.erase(std::remove_if(popups.begin(), popups.end(), [](const Popup& p) { return p.life <= 0; }), popups.end());
     }
 
+
+    // ============================================================ ARSENAL ==
+    float wCooldown() const {
+        static const float cd[W_COUNT][4] = { { 0.2f, 0.14f, 0.14f, 0.14f }, { 0.32f, 0.3f, 0.28f, 0.26f }, { 0, 0, 0, 0 },
+                                              { 0.42f, 0.36f, 0.36f, 0.32f }, { 0.5f, 0.45f, 0.34f, 0.34f } };
+        return cd[weapon][wlevel];
+    }
+    int countPB(int kind) const { int n = 0; for (auto& b : pBullets) if (b.kind == kind) ++n; return n; }
+
+    // Fire one volley of the current (non-laser) weapon; each class has its own on-screen limit
+    void firePlayerWeapon() {
+        Vector2 m{ player.x, player.y - 26 };
+        switch (weapon) {
+            case W_PHOTON: {
+                static const int volleys[4] = { 5, 6, 6, 7 };
+                int per = wlevel >= 3 ? 3 : (wlevel >= 2 ? 2 : 1);
+                if (countPB(PB_PHOTON) + per > volleys[wlevel] * per) return;
+                for (int i = 0; i < per; ++i) { float off = (i - (per - 1) / 2.0f) * 16;
+                    pBullets.push_back({ { m.x + off, m.y }, { off * 0.6f, -640 }, PB_PHOTON }); }
+                break; }
+            case W_SPREAD: {
+                static const int pel[4] = { 3, 5, 5, 7 }, vol[4] = { 2, 2, 3, 3 };
+                static const float spr[4] = { 30, 42, 46, 62 };
+                int n = pel[wlevel];
+                if (countPB(PB_SPREAD) + n > vol[wlevel] * n) return;
+                for (int i = 0; i < n; ++i) { float a = (-90 - spr[wlevel] / 2 + spr[wlevel] * i / (n - 1)) * DEG2RAD;
+                    pBullets.push_back({ m, { cosf(a) * 620, sinf(a) * 620 }, PB_SPREAD }); }
+                break; }
+            case W_HOMING: {
+                static const int per[4] = { 2, 2, 3, 4 }, cap[4] = { 6, 6, 8, 10 };
+                int n = per[wlevel];
+                if (countPB(PB_HOMING) + n > cap[wlevel]) return;
+                for (int i = 0; i < n; ++i) { float a = (-90 + (i - (n - 1) / 2.0f) * 38) * DEG2RAD;
+                    pBullets.push_back({ { m.x + cosf(a) * 10, m.y + 6 }, { cosf(a) * 300, sinf(a) * 300 }, PB_HOMING }); }
+                break; }
+            case W_ION: {
+                static const int cap[4] = { 2, 2, 3, 3 };
+                if (countPB(PB_ION) >= cap[wlevel]) return;
+                pBullets.push_back({ m, { 0, -430 }, PB_ION });
+                break; }
+            default: return;
+        }
+        fireCooldown = wCooldown(); ++shotsFired;
+        Color c = WCOL[weapon];
+        parts.push_back({ m, { 0, 0 }, 0.12f, 0.12f, 22, c, FLASH });
+        PlaySound(sfx[SFX_SHOOT]);
+    }
+
+    // Damage one enemy by one hit. Returns true if it was destroyed.
+    bool hitEnemy(Enemy& e, Vector2 at) {
+        (void)at;
+        if (--e.hp > 0) {
+            PlaySound(sfx[SFX_HIT]);
+            if (e.type == SHIELDED) {          // energy shield pops in a burst of cyan shards
+                rings.push_back({ e.pos, 0.3f, 0.3f, 36, Color{ 90, 255, 240, 255 } });
+                for (int q = 0; q < 16; ++q) {
+                    float ang = frand(0, 2 * PI), sp = frand(80, 200), life = frand(0.3f, 0.6f);
+                    parts.push_back({ Vector2Add(e.pos, { cosf(ang) * 22, sinf(ang) * 22 }), { cosf(ang) * sp, sinf(ang) * sp },
+                                      life, life, frand(2, 3.5f), Color{ 120, 255, 240, 255 }, DEBRIS, frand(0, 360), frand(-800, 800) });
+                }
+            } else if (e.type == COURIER) {    // sparks; outer armour plates blow off at half health
+                for (int q = 0; q < 5; ++q) { float ang = frand(0, 2 * PI), sp = frand(80, 220), life = frand(0.2f, 0.4f);
+                    parts.push_back({ at, { cosf(ang) * sp, sinf(ang) * sp }, life, life, frand(1, 2), UPG_COL, SPARK }); }
+                if (!e.armourOff && e.hp * 2 <= e.maxHp) {
+                    e.armourOff = true;
+                    for (int side : { -1, 1 }) for (int q = 0; q < 2; ++q) {
+                        float life = 1.2f;
+                        parts.push_back({ { e.pos.x + side * 24.0f, e.pos.y + (q ? 8.0f : -8.0f) }, { side * frand(160, 260), frand(-80, 80) },
+                                          life, life, frand(6, 8), Color{ 110, 116, 135, 255 }, HULL, frand(0, 360), frand(-600, 600) });
+                    }
+                    explode(e.pos, ORANGE, UPG_COL, 14, 160);
+                }
+            } else explode(e.pos, PURPLE, WHITE, 10, 120);
+            return false;
+        }
+        bool diving = e.state != FORMATION;
+        int pts = enemyPoints(e.type, diving);
+        addScore(pts);
+        if ((diving && pts >= 160) || e.type == COURIER) popups.push_back({ e.pos, 1.0f, std::to_string(pts) });
+        e.state = DEAD;
+        if (e.type == COURIER) {
+            courierBurst(e.pos);
+            packages.push_back({ { e.pos.x, e.pos.y + 6 }, e.cargo, 0 });
+        } else {
+            explode(e.pos, enemyColor(e.type), WHITE, e.type == MINI ? 14 : 28, 220);
+            PlaySound(sfx[SFX_BOOM]);
+        }
+        if (e.type == SPLITTER) pendingSplits.push_back(e.pos);
+        return true;
+    }
+
+    // Courier destroyed: the hull bursts into dozens of pieces that leave the screen in about a second
+    void courierBurst(Vector2 at) {
+        parts.push_back({ at, { 0, 0 }, 0.3f, 0.3f, 90, Color{ 255, 240, 210, 255 }, FLASH });
+        parts.push_back({ at, { 0, 0 }, 0.45f, 0.45f, 60, Color{ 255, 150, 60, 255 }, FLASH });
+        rings.push_back({ at, 0.5f, 0.5f, 220, Color{ 255, 200, 120, 255 } });
+        for (int i = 0; i < 56; ++i) {
+            float ang = frand(0, 2 * PI), sp = frand(500, 1300), life = 1.4f;
+            int ty = GetRandomValue(0, 2);
+            Color c = ty == 0 ? Color{ 110, 116, 135, 255 } : ty == 1 ? Color{ 230, 185, 70, 255 } : Color{ 255, 190, 110, 255 };
+            parts.push_back({ at, { cosf(ang) * sp, sinf(ang) * sp }, life, life, frand(3, 9), c, HULL, frand(0, 360), frand(-1400, 1400) });
+        }
+        for (int i = 0; i < 18; ++i) { float ang = frand(0, 2 * PI), sp = frand(200, 500), life = frand(0.3f, 0.6f);
+            parts.push_back({ at, { cosf(ang) * sp, sinf(ang) * sp }, life, life, frand(1.5f, 3), Color{ 255, 200, 120, 255 }, SPARK }); }
+        shake = std::max(shake, 0.35f);
+        PlaySound(sfx[SFX_BOOM]); PlaySound(sfx[SFX_IMPACT]);
+    }
+
+    // The Courier shoots the basic form of what it carries (or of the player's weapon, if it carries an upgrade)
+    void courierFire(const Enemy& e) {
+        int w = e.cargo >= 0 ? e.cargo : weapon;
+        Vector2 from{ e.pos.x, e.pos.y + 24 };
+        Vector2 d = Vector2Normalize(Vector2Subtract(player, from));
+        float a = atan2f(d.y, d.x);
+        switch (w) {
+            case W_PHOTON: eBullets.push_back({ from, Vector2Scale(d, 300), BK_C_PHOTON }); break;
+            case W_SPREAD: for (int i = -1; i <= 1; ++i) { float aa = a + i * 14 * DEG2RAD;
+                               eBullets.push_back({ from, { cosf(aa) * 260, sinf(aa) * 260 }, BK_C_SPREAD }); } break;
+            case W_PULSE:  eBullets.push_back({ from, { 0, 540 }, BK_C_PULSE }); break;
+            case W_HOMING: eBullets.push_back({ from, Vector2Scale(d, 150), BK_C_HOMING }); break;
+            default:       eBullets.push_back({ from, Vector2Scale(d, 170), BK_C_ION }); break;
+        }
+        Color c = WCOL[w];
+        parts.push_back({ from, { 0, 0 }, 0.15f, 0.15f, 18, c, FLASH });
+        PlaySound(sfx[SFX_DIVE]);
+    }
+
+    // Ion Burst detonation: damages everything nearby; Lv3 chains lightning to up to 3 more enemies
+    void ionBlast(Vector2 at, bool bossDirect) {
+        static const float R[4] = { 55, 75, 75, 85 };
+        float r = R[wlevel];
+        Color c = WCOL[W_ION];
+        parts.push_back({ at, { 0, 0 }, 0.25f, 0.25f, r * 1.1f, Color{ 230, 200, 255, 255 }, FLASH });
+        rings.push_back({ at, 0.3f, 0.3f, r, c });
+        explode(at, c, WHITE, 16, 200);
+        PlaySound(sfx[SFX_IMPACT]);
+        for (auto& e : enemies)
+            if (e.state != DEAD && e.state != WAITING && Vector2Distance(e.pos, at) < r + 14) hitEnemy(e, at);
+        std::vector<int> mids;
+        for (int j = 0; j < (int)meteors.size(); ++j) if (Vector2Distance(meteors[j].pos, at) < r + meteors[j].r() * 0.6f) mids.push_back(meteors[j].id);
+        for (int id : mids) {
+            auto it = std::find_if(meteors.begin(), meteors.end(), [id](const Meteor& m) { return m.id == id; });
+            if (it != meteors.end()) hitMeteor((size_t)(it - meteors.begin()), Vector2Subtract(it->pos, at));
+        }
+        if (!bossDirect && boss.active && boss.state == B_FIGHT && Vector2Distance(boss.core(), at) < r + boss.size() * 0.3f) damageBoss(at);
+        if (wlevel >= 3) {   // chain lightning
+            std::vector<Enemy*> near;
+            for (auto& e : enemies) if (e.state != DEAD && e.state != WAITING && Vector2Distance(e.pos, at) < 180) near.push_back(&e);
+            std::sort(near.begin(), near.end(), [&](Enemy* a, Enemy* b) { return Vector2Distance(a->pos, at) < Vector2Distance(b->pos, at); });
+            for (int k = 0; k < (int)near.size() && k < 3; ++k) {
+                zaps.push_back({ at, near[k]->pos, 0.22f, (unsigned)GetRandomValue(1, 1 << 20) });
+                hitEnemy(*near[k], near[k]->pos);
+            }
+        }
+    }
+
+    // Pulse Laser: continuous beam, damage in ticks; stops at the first thing it hits (Lv3 pierces everything)
+    void updateLaser(float dt) {
+        static const float wid[4] = { 4.5f, 6, 8, 11 }, tick[4] = { 0.16f, 0.14f, 0.12f, 0.11f };
+        float x = player.x, y0 = player.y - 26, w = wid[wlevel];
+        bool pierce = wlevel >= 3;
+        float stop = 0;   // y where the beam ends
+        Enemy* firstE = nullptr; int firstM = -1; bool firstBoss = false;
+        for (auto& e : enemies) {
+            if (e.state == DEAD || e.state == WAITING || e.pos.y > y0) continue;
+            float er = e.type == COURIER ? 26.f : e.type == BOSS ? 21.f : 16.f;
+            if (fabsf(e.pos.x - x) < er + w / 2 && e.pos.y > stop) { stop = e.pos.y; firstE = &e; firstM = -1; firstBoss = false; }
+        }
+        for (int j = 0; j < (int)meteors.size(); ++j) {
+            const Meteor& m = meteors[j];
+            if (m.pos.y < y0 && fabsf(m.pos.x - x) < m.r() * 0.9f + w / 2 && m.pos.y > stop) { stop = m.pos.y; firstM = j; firstE = nullptr; firstBoss = false; }
+        }
+        float bossY = -1;
+        if (boss.active && boss.state == B_FIGHT)
+            for (float y = y0; y > 0; y -= 6) if (boss.hitTest({ x, y })) { bossY = y; break; }
+        if (bossY > stop) { stop = bossY; firstBoss = true; firstE = nullptr; firstM = -1; }
+        laserTop = pierce ? 0 : stop;
+        // sparks where it bites
+        if (stop > 0 && GetRandomValue(0, 1)) { float life = frand(0.15f, 0.3f);
+            parts.push_back({ { x + frand(-w, w), stop }, { frand(-140, 140), frand(-120, 40) }, life, life, frand(1, 2), WCOL[W_PULSE], SPARK }); }
+        laserTick -= dt;
+        if (laserTick > 0) return;
+        laserTick = tick[wlevel]; ++shotsFired;
+        if (pierce) {
+            bool any = false;
+            for (auto& e : enemies) {
+                if (e.state == DEAD || e.state == WAITING || e.pos.y > y0) continue;
+                float er = e.type == COURIER ? 26.f : e.type == BOSS ? 21.f : 16.f;
+                if (fabsf(e.pos.x - x) < er + w / 2) { hitEnemy(e, { x, e.pos.y }); any = true; }
+            }
+            std::vector<int> mids;
+            for (auto& m : meteors) if (m.pos.y < y0 && fabsf(m.pos.x - x) < m.r() * 0.9f + w / 2) mids.push_back(m.id);
+            for (int id : mids) { auto it = std::find_if(meteors.begin(), meteors.end(), [id](const Meteor& m) { return m.id == id; });
+                if (it != meteors.end()) { hitMeteor((size_t)(it - meteors.begin()), { 0, -1 }); any = true; } }
+            if (bossY > 0) { damageBoss({ x, bossY }); any = true; }
+            if (any) ++hits;
+        } else if (firstE) { hitEnemy(*firstE, { x, stop }); ++hits; }
+        else if (firstM >= 0) { hitMeteor((size_t)firstM, { 0, -1 }); ++hits; }
+        else if (firstBoss) { damageBoss({ x, stop }); ++hits; }
+    }
+
+    void collectPackage(const Package& pk) {
+        Color c = pk.content >= 0 ? WCOL[pk.content] : UPG_COL;
+        std::string label;
+        if (pk.content < 0 || pk.content == weapon) {
+            if (wlevel < 3) { ++wlevel; label = TextFormat("UPGRADE +1   LV%d", wlevel); }
+            else { addScore(1000); label = "MAX LEVEL  +1000"; }
+        } else {
+            weapon = pk.content; heat = 0; overheated = false;   // keeps the current upgrade level
+            label = WNAME[weapon];
+        }
+        popups.push_back({ { player.x - 70, player.y - 80 }, 1.8f, label });
+        parts.push_back({ player, { 0, 0 }, 0.35f, 0.35f, 80, c, FLASH });
+        rings.push_back({ player, 0.4f, 0.4f, 80, c });
+        rings.push_back({ player, 0.6f, 0.6f, 120, Color{ c.r, c.g, c.b, 140 } });
+        for (int i = 0; i < 24; ++i) { float ang = frand(0, 2 * PI), sp = frand(80, 220), life = frand(0.3f, 0.6f);
+            parts.push_back({ player, { cosf(ang) * sp, sinf(ang) * sp }, life, life, frand(1.2f, 2.2f), c, SPARK }); }
+        PlaySound(sfx[SFX_SHIELD_UP]); PlaySound(sfx[SFX_LIFE]);
+    }
+
+    void updatePackages(float dt) {
+        for (auto& pk : packages) {
+            pk.t += dt; pk.pos.y += 120 * dt;
+            pk.pos.x += sinf(pk.t * 2.2f) * 12 * dt;
+            if (playerAlive && mode == PLAYING && Vector2Distance(pk.pos, player) < 34) { collectPackage(pk); pk.pos.y = H + 100; }
+        }
+        packages.erase(std::remove_if(packages.begin(), packages.end(), [](const Package& p) { return p.pos.y > H + 30; }), packages.end());
+        for (auto& z : zaps) z.life -= dt;
+        zaps.erase(std::remove_if(zaps.begin(), zaps.end(), [](const Lightning& z) { return z.life <= 0; }), zaps.end());
+    }
+
+    // Weapon status: compact indicator in the bottom HUD strip, after the spare-ship icons (never over the player)
+    void drawWeaponIndicator() {
+        int n = std::max(0, lives - (playerAlive ? 1 : 0));
+        float x = n > 0 ? 41 + (n - 1) * 34 + 8.0f : 12;
+        Vector2 o{ x, H - 34.0f };
+        Color col = WCOL[weapon];
+        DrawRectangleRounded({ o.x, o.y, 64, 24 }, 0.35f, 6, Color{ 10, 12, 28, 200 });
+        DrawRectangleRoundedLinesEx({ o.x, o.y, 64, 24 }, 0.35f, 6, 1.0f, Color{ col.r, col.g, col.b, 170 });
+        DrawRectangleRounded({ o.x + 3, o.y + 3, 18, 18 }, 0.3f, 6, Color{ (unsigned char)(col.r / 3), (unsigned char)(col.g / 3), (unsigned char)(col.b / 3), 255 });
+        weaponIcon(weapon, { o.x + 12, o.y + 12 }, 12, col);
+        bool laser = weapon == W_PULSE;
+        for (int i = 0; i < 3; i++) {
+            Vector2 c{ o.x + 30 + i * 11.0f, o.y + (laser ? 9.0f : 12.0f) };
+            if (i < wlevel) DrawCircleV(c, 3.4f, col); else DrawCircleLines((int)c.x, (int)c.y, 3.4f, Color{ col.r, col.g, col.b, 150 });
+        }
+        if (laser) {
+            Color hc = overheated ? (fmodf(time, 0.3f) < 0.15f ? Color{ 255, 90, 60, 255 } : Color{ 120, 40, 30, 255 }) : (heat > 0.8f ? Color{ 255, 150, 60, 255 } : col);
+            DrawRectangle((int)o.x + 25, (int)o.y + 16, 34, 3, Color{ 30, 40, 60, 255 });
+            DrawRectangle((int)o.x + 25, (int)o.y + 16, (int)(34 * heat), 3, hc);
+        }
+    }
+
+    // Jagged lightning segment (Ion Burst chain)
+    void drawZap(Vector2 a, Vector2 b, unsigned seed, Color c, float w, unsigned char alpha) {
+        Vector2 prev = a; unsigned s = seed;
+        auto rnd = [&]() { s = s * 1664525u + 1013904223u; return (s >> 8) / 16777216.0f; };
+        Vector2 n = Vector2Normalize({ -(b.y - a.y), b.x - a.x });
+        for (int i = 1; i <= 8; ++i) {
+            Vector2 q = Vector2Lerp(a, b, i / 8.0f);
+            if (i < 8) q = Vector2Add(q, Vector2Scale(n, (rnd() - 0.5f) * 18));
+            BeginBlendMode(BLEND_ADDITIVE); DrawLineEx(prev, q, w * 3, Color{ c.r, c.g, c.b, (unsigned char)(alpha * 0.35f) }); EndBlendMode();
+            DrawLineEx(prev, q, w, Color{ 240, 220, 255, alpha });
+            prev = q;
+        }
+    }
+
     std::vector<Vector2> pendingSplits;
     int enemyPoints(EType t, bool diving) const {
         switch (t) {
             case BEE: return diving ? 100 : 50;          case BUTTERFLY: return diving ? 160 : 80;
             case BOSS: return diving ? 400 : 150;        case DART: return diving ? 240 : 120;
             case SHIELDED: return diving ? 300 : 150;    case SPLITTER: return diving ? 200 : 100;
+            case COURIER: return 500;
             default: return 60;                          // MINI
         }
     }
@@ -1456,6 +1930,7 @@ struct Game {
         switch (t) {
             case BEE: return YELLOW; case BUTTERFLY: return RED; case BOSS: return GREEN;
             case DART: return Color{ 255, 80, 60, 255 }; case SHIELDED: return Color{ 90, 255, 230, 255 };
+            case COURIER: return UPG_COL;
             default: return Color{ 220, 90, 255, 255 };
         }
     }
@@ -1474,50 +1949,44 @@ struct Game {
     }
 
     void collisions() {
-        // Player bullets vs enemies
+        // Player projectiles vs enemies, rocks and the boss
         for (size_t i = 0; i < pBullets.size();) {
             bool used = false;
+            Bullet pb = pBullets[i];
+            float pr = pb.kind == PB_ION ? 9.f : pb.kind == PB_SPREAD ? 5.f : pb.kind == PB_HOMING ? 6.f : 7.f;
+            auto impact = [&](Vector2 at) {
+                if (pb.kind == PB_PHOTON) torpedoImpact(at);
+                else if (pb.kind != PB_ION) {
+                    Color c = pb.kind == PB_SPREAD ? WCOL[W_SPREAD] : WCOL[W_HOMING];
+                    parts.push_back({ at, { 0, 0 }, 0.15f, 0.15f, 18, c, FLASH });
+                    for (int q = 0; q < 6; ++q) { float ang = frand(0, 2 * PI), sp = frand(100, 240), life = frand(0.12f, 0.3f);
+                        parts.push_back({ at, { cosf(ang) * sp, sinf(ang) * sp }, life, life, frand(1, 1.8f), c, SPARK }); }
+                    PlaySound(sfx[SFX_IMPACT]);
+                }
+            };
             for (auto& e : enemies) {
                 if (e.state == DEAD || e.state == WAITING) continue;
-                float er = e.type == BOSS ? 21.f : e.type == SHIELDED ? (e.hp > 1 ? 24.f : 18.f) : e.type == MINI ? 11.f : e.type == DART ? 14.f : 17.f;
-                if (CheckCollisionCircles(pBullets[i].pos, 7, e.pos, er)) {
+                float er = e.type == BOSS ? 21.f : e.type == COURIER ? 26.f : e.type == SHIELDED ? (e.hp > 1 ? 24.f : 18.f) : e.type == MINI ? 11.f : e.type == DART ? 14.f : 17.f;
+                if (CheckCollisionCircles(pb.pos, pr, e.pos, er)) {
                     used = true; ++hits;
-                    torpedoImpact(pBullets[i].pos);
-                    if (--e.hp > 0) {
-                        PlaySound(sfx[SFX_HIT]);
-                        if (e.type == SHIELDED) {          // energy shield pops in a burst of cyan shards
-                            rings.push_back({ e.pos, 0.3f, 0.3f, 36, Color{ 90, 255, 240, 255 } });
-                            for (int q = 0; q < 16; ++q) {
-                                float ang = frand(0, 2 * PI), sp = frand(80, 200), life = frand(0.3f, 0.6f);
-                                parts.push_back({ Vector2Add(e.pos, { cosf(ang) * 22, sinf(ang) * 22 }), { cosf(ang) * sp, sinf(ang) * sp },
-                                                  life, life, frand(2, 3.5f), Color{ 120, 255, 240, 255 }, DEBRIS, frand(0, 360), frand(-800, 800) });
-                            }
-                        } else explode(e.pos, PURPLE, WHITE, 10, 120);
-                        break;
-                    }
-                    bool diving = e.state != FORMATION;
-                    int pts = enemyPoints(e.type, diving);
-                    addScore(pts);
-                    if (diving && pts >= 160) popups.push_back({ e.pos, 1.0f, std::to_string(pts) });
-                    explode(e.pos, enemyColor(e.type), WHITE, e.type == MINI ? 14 : 28, 220);
-                    e.state = DEAD;
-                    if (e.type == SPLITTER) pendingSplits.push_back(e.pos);
-                    PlaySound(sfx[SFX_BOOM]);
+                    impact(pb.pos);
+                    if (pb.kind == PB_ION) ionBlast(pb.pos, false); else hitEnemy(e, pb.pos);
                     break;
                 }
             }
             if (!used)
                 for (size_t j = 0; j < meteors.size(); ++j)
-                    if (CheckCollisionCircles(pBullets[i].pos, 6, meteors[j].pos, meteors[j].r() * 0.9f)) {
+                    if (CheckCollisionCircles(pb.pos, pr - 1, meteors[j].pos, meteors[j].r() * 0.9f)) {
                         used = true; ++hits;
-                        torpedoImpact(pBullets[i].pos);
-                        hitMeteor(j, pBullets[i].vel);
+                        impact(pb.pos);
+                        if (pb.kind == PB_ION) ionBlast(pb.pos, false); else hitMeteor(j, pb.vel);
                         break;
                     }
-            if (!used && boss.active && boss.state == B_FIGHT && boss.hitTest(pBullets[i].pos)) {
+            if (!used && boss.active && boss.state == B_FIGHT && boss.hitTest(pb.pos)) {
                 used = true; ++hits;
-                torpedoImpact(pBullets[i].pos);
-                damageBoss(pBullets[i].pos);
+                impact(pb.pos);
+                damageBoss(pb.pos);
+                if (pb.kind == PB_ION && boss.active && boss.state == B_FIGHT) ionBlast(pb.pos, true);
             }
             if (used) pBullets.erase(pBullets.begin() + i); else ++i;
         }
@@ -1877,6 +2346,24 @@ struct Game {
                     }
                     break;
                 case SPLITTER: drawShip(gfx.splitter[f], e.pos, 46 * g, e.angle); break;
+                case COURIER: {
+                    float S = 62 * g;
+                    drawShip(gfx.courier[e.armourOff ? 1 : 0], e.pos, S, e.angle);
+                    Color c = e.cargo >= 0 ? WCOL[e.cargo] : UPG_COL;          // cargo pod glows the colour of what it carries
+                    Vector2 pc{ e.pos.x, e.pos.y - S * 0.01f };
+                    float rr = S * 0.075f, pl = 0.75f + 0.25f * sinf(time * 5);
+                    DrawCircleV(pc, rr * 1.05f, Color{ c.r, c.g, c.b, 235 });
+                    BeginBlendMode(BLEND_ADDITIVE);
+                    drawGlow(pc, rr * 3.4f * pl, Color{ c.r, c.g, c.b, 200 });
+                    drawGlow(pc, rr * 0.9f, Color{ 255, 250, 235, 230 });
+                    EndBlendMode();
+                    if (e.hp < e.maxHp) {                                         // health bar
+                        float f = (float)e.hp / e.maxHp;
+                        DrawRectangle((int)(e.pos.x - 24), (int)(e.pos.y - 38), 48, 5, Color{ 30, 25, 20, 220 });
+                        DrawRectangle((int)(e.pos.x - 24), (int)(e.pos.y - 38), (int)(48 * f), 5, c);
+                    }
+                    break;
+                }
                 case MINI:     drawShip(gfx.splitter[f], e.pos, 26 * g, e.angle); break;
             }
         }
@@ -1904,20 +2391,59 @@ struct Game {
             Color c = p.col; c.a = (unsigned char)(200 * t);
             drawGlow(p.pos, p.size * (0.6f + 0.4f * t), c);
         }
-        for (auto& b : pBullets) {   // photon torpedo
-            float pulse = 1 + 0.18f * sinf(time * 38 + b.pos.x);
-            float spin = time * 540 + b.pos.x * 3;
-            for (int k = 1; k <= 6; ++k)    // comet tail
-                drawGlow({ b.pos.x, b.pos.y + k * 6.0f }, 10 - k * 1.2f, Color{ 255, 100, 40, (unsigned char)(150 - k * 20) });
-            drawGlow(b.pos, 30 * pulse, Color{ 255, 60, 25, 130 });
-            drawGlow(b.pos, 17 * pulse, Color{ 255, 120, 50, 230 });
-            drawGlow(b.pos, 8, Color{ 255, 210, 150, 255 });
-            for (int k = 0; k < 2; ++k) {   // rotating star-flare spikes
-                float a = spin + k * 90;
-                DrawRectanglePro({ b.pos.x, b.pos.y, 30 * pulse, 1.6f }, { 15 * pulse, 0.8f }, a, Color{ 255, 170, 110, 170 });
-                DrawRectanglePro({ b.pos.x, b.pos.y, 16, 1.0f }, { 8, 0.5f }, a + 45, Color{ 255, 230, 200, 140 });
+        for (auto& b : pBullets) {
+            Vector2 dv = Vector2Length(b.vel) > 1 ? Vector2Normalize(b.vel) : Vector2{ 0, -1 };
+            if (b.kind == PB_PHOTON) {         // photon torpedo
+                float pulse = 1 + 0.18f * sinf(time * 38 + b.pos.x);
+                float spin = time * 540 + b.pos.x * 3;
+                for (int k = 1; k <= 6; ++k)    // comet tail
+                    drawGlow({ b.pos.x, b.pos.y + k * 6.0f }, 10 - k * 1.2f, Color{ 255, 100, 40, (unsigned char)(150 - k * 20) });
+                drawGlow(b.pos, 30 * pulse, Color{ 255, 60, 25, 130 });
+                drawGlow(b.pos, 17 * pulse, Color{ 255, 120, 50, 230 });
+                drawGlow(b.pos, 8, Color{ 255, 210, 150, 255 });
+                for (int k = 0; k < 2; ++k) {   // rotating star-flare spikes
+                    float a = spin + k * 90;
+                    DrawRectanglePro({ b.pos.x, b.pos.y, 30 * pulse, 1.6f }, { 15 * pulse, 0.8f }, a, Color{ 255, 170, 110, 170 });
+                    DrawRectanglePro({ b.pos.x, b.pos.y, 16, 1.0f }, { 8, 0.5f }, a + 45, Color{ 255, 230, 200, 140 });
+                }
+                DrawCircleV(b.pos, 3.2f, WHITE);
+            } else if (b.kind == PB_SPREAD) {  // spread plasma bolt
+                drawGlow(b.pos, 18, Color{ 255, 150, 40, 210 });
+                for (int k = 1; k <= 3; ++k) drawGlow(Vector2Subtract(b.pos, Vector2Scale(dv, k * 7.0f)), 9 - k * 2.0f, Color{ 255, 140, 40, (unsigned char)(170 - k * 40) });
+                DrawLineEx(Vector2Subtract(b.pos, Vector2Scale(dv, 8)), Vector2Add(b.pos, Vector2Scale(dv, 6)), 5, Color{ 255, 220, 120, 255 });
+                DrawLineEx(Vector2Subtract(b.pos, Vector2Scale(dv, 5)), Vector2Add(b.pos, Vector2Scale(dv, 5)), 2.2f, WHITE);
+            } else if (b.kind == PB_HOMING) {  // homing missile (body drawn here; trail from particles)
+                drawGlow(Vector2Subtract(b.pos, Vector2Scale(dv, 7)), 12, Color{ 160, 255, 140, 230 });
+                float ang = atan2f(dv.y, dv.x) * RAD2DEG;
+                DrawRectanglePro({ b.pos.x, b.pos.y, 15, 4.5f }, { 7.5f, 2.25f }, ang, Color{ 215, 245, 215, 255 });
+                DrawCircleV(Vector2Add(b.pos, Vector2Scale(dv, 7)), 2.4f, WCOL[W_HOMING]);
+            } else if (b.kind == PB_ION) {     // ion orb with crackle
+                drawGlow(b.pos, 32, Color{ 170, 90, 255, 180 });
+                drawGlow(b.pos, 16, Color{ 210, 150, 255, 255 });
+                DrawCircleV(b.pos, 5, WHITE);
             }
-            DrawCircleV(b.pos, 3.2f, WHITE);
+        }
+        for (auto& b : pBullets) if (b.kind == PB_ION) {
+            unsigned sd = (unsigned)(b.pos.y * 13 + b.pos.x) + (unsigned)(time * 20);
+            for (int i = 0; i < 3; ++i) { float a = (sd % 628) / 100.0f + i * 2.1f;
+                drawZap(b.pos, { b.pos.x + cosf(a) * 16, b.pos.y + sinf(a) * 16 }, sd + i, WCOL[W_ION], 1, 220); }
+        }
+        if (laserOn && playerAlive) {           // pulse laser beam
+            static const float wid[4] = { 4.5f, 6, 8, 11 };
+            float w = wid[wlevel], x = player.x, y0 = player.y - 26, y1 = laserTop;
+            for (float y = y1; y < y0; y += 6) {
+                float ww = w * (1 + 0.12f * sinf(y * 0.09f + time * 30));
+                DrawRectangleV({ x - ww * 1.6f, y }, { ww * 3.2f, 6.5f }, Color{ 40, 180, 255, 45 });
+                DrawRectangleV({ x - ww / 2, y }, { ww, 6.5f }, Color{ 70, 220, 255, 200 });
+                DrawRectangleV({ x - ww * 0.18f, y }, { ww * 0.36f, 6.5f }, Color{ 230, 255, 255, 255 });
+            }
+            drawGlow({ x, y0 }, w * 2.4f, Color{ 70, 220, 255, 230 });
+            if (y1 > 0) drawGlow({ x, y1 }, w * 2.8f, Color{ 120, 240, 255, 230 });
+        }
+        for (auto& z : zaps) {
+            EndBlendMode();
+            drawZap(z.a, z.b, z.seed, WCOL[W_ION], 2.2f, (unsigned char)(255 * std::min(1.0f, z.life / 0.15f)));
+            BeginBlendMode(BLEND_ADDITIVE);
         }
         for (auto& b : eBullets) {
             Vector2 dv = Vector2Length(b.vel) > 1 ? Vector2Normalize(b.vel) : Vector2{ 0, 1 };
@@ -1953,6 +2479,24 @@ struct Game {
                 DrawLineEx(back, Vector2Subtract(back, Vector2Scale(dv, 20 * fl)), 6, Color{ 255, 190, 80, 230 });
                 DrawLineEx(back, Vector2Subtract(back, Vector2Scale(dv, 10 * fl)), 2.5f, Color{ 255, 250, 220, 255 });
                 if (fmodf(time + b.pos.x * 0.01f, 0.25f) < 0.12f) drawGlow(Vector2Add(b.pos, Vector2Scale(dv, 12)), 12, Color{ 255, 40, 40, 255 });
+            } else if (b.kind == BK_C_SPREAD) {   // courier: basic spread bolt
+                drawGlow(b.pos, 14, Color{ 255, 150, 40, 200 });
+                DrawLineEx(Vector2Subtract(b.pos, Vector2Scale(dv, 6)), Vector2Add(b.pos, Vector2Scale(dv, 4)), 4, Color{ 255, 220, 120, 255 });
+            } else if (b.kind == BK_C_PULSE) {    // courier: short laser burst
+                drawGlow(b.pos, 14, Color{ 70, 220, 255, 200 });
+                DrawLineEx(Vector2Subtract(b.pos, Vector2Scale(dv, 22)), b.pos, 4, Color{ 70, 220, 255, 230 });
+                DrawLineEx(Vector2Subtract(b.pos, Vector2Scale(dv, 18)), b.pos, 1.6f, WHITE);
+            } else if (b.kind == BK_C_HOMING) {   // courier: slow seeker
+                drawGlow(b.pos, 14, Color{ 110, 255, 120, 200 });
+                DrawRectanglePro({ b.pos.x, b.pos.y, 13, 4 }, { 6.5f, 2 }, atan2f(dv.y, dv.x) * RAD2DEG, Color{ 215, 245, 215, 255 });
+            } else if (b.kind == BK_C_ION) {      // courier: slow ion orb
+                drawGlow(b.pos, 24, Color{ 170, 90, 255, 180 });
+                drawGlow(b.pos, 10, Color{ 230, 200, 255, 255 });
+                DrawCircleV(b.pos, 3.2f, WHITE);
+            } else if (b.kind == BK_C_PHOTON) {   // courier: basic torpedo
+                drawGlow(b.pos, 18, Color{ 255, 90, 40, 170 });
+                drawGlow(b.pos, 8, Color{ 255, 210, 150, 255 });
+                DrawCircleV(b.pos, 2.6f, WHITE);
             } else if (b.kind == BK_METEOR) {  // METEOR STORM: fiery entry tail (rock drawn below)
                 drawGlow(b.pos, 28, Color{ 255, 100, 30, 200 });
                 for (int k = 1; k <= 6; ++k)
@@ -2019,14 +2563,17 @@ struct Game {
             DrawTriangle({ w.x - 8, 4 }, { w.x, 18 }, { w.x + 8, 4 }, c);
             DrawRectangle((int)w.x - 1, 20, 2, 6, c);
         }
-        for (auto& p : parts) if (p.kind == DEBRIS) {
+        for (auto& p : parts) if (p.kind == DEBRIS || p.kind == HULL) {
             float t = p.life / p.maxLife;
-            Color c = p.col; c.a = (unsigned char)(255 * t);
-            DrawRectanglePro({ p.pos.x, p.pos.y, p.size * 1.6f, p.size * 0.7f }, { p.size * 0.8f, p.size * 0.35f }, p.rot, c);
+            Color c = p.col; c.a = (unsigned char)(255 * (p.kind == HULL ? std::min(1.0f, t * 3) : t));
+            DrawRectanglePro({ p.pos.x, p.pos.y, p.size * 1.8f, p.size * 0.8f }, { p.size * 0.9f, p.size * 0.4f }, p.rot, c);
         }
+        for (auto& pk : packages) drawPackage(pk.content, pk.pos, 44, pk.t);
         drawHudShapes();
+        if (escMenu) drawEscMenuShapes();
         EndMode2D();
 
+        if (escMenu) { drawEscMenuText(); EndScissorMode(); EndDrawing(); return; }
         for (auto& p : popups) text(p.text.c_str(), p.pos.x - 16, p.pos.y, 18, SKYBLUE);
         drawHudText();
         EndScissorMode();
@@ -2078,6 +2625,7 @@ struct Game {
         }
         for (int i = 0; i < std::max(0, lives - (playerAlive ? 1 : 0)); ++i)
             drawShip(gfx.player, { 26.0f + i * 34, H - 22.0f }, 30, 0, false);
+        if (mode == PLAYING || mode == VICTORY) drawWeaponIndicator();
         for (int i = 0; i < stage && i < 12; ++i) {
             int st = stage - i;
             float x = W - 20.0f - i * 16;
@@ -2114,7 +2662,7 @@ struct Game {
             text(" 50 / 100", W / 2.0f - 60, 448, 22, YELLOW);
             text("formation / diving", W / 2.0f - 60, 490, 14, DARKGRAY);
             if (fmodf(time, 1.0f) < 0.6f) drawCentered("PRESS SPACE TO START", 570, 26, RAYWHITE);
-            drawCentered("ARROWS / A D  move    SPACE  fire    P  pause", 640, 16, GRAY);
+            drawCentered("ARROWS / A D  move    SPACE  fire    P / ESC  pause", 640, 16, GRAY);
             drawCentered("F11 / ALT+ENTER  fullscreen", 664, 16, GRAY);
             drawCentered(TextFormat("HIGH SCORE  %d", hiScore), 710, 22, GOLD);
             drawCentered("CTRL+L  debug stage select", 760, 12, Color{ 90, 90, 110, 255 });
@@ -2183,6 +2731,15 @@ struct Game {
     void saveHiScore() { if (debugRun) return; std::ofstream f(HISCORE_FILE); if (f) f << hiScore; }
 };
 
+// On laptops with hybrid graphics, ask the NVIDIA (Optimus) and AMD (PowerXpress) drivers
+// to run the game on the discrete, high-performance GPU. Ignored on single-GPU systems.
+#ifdef _WIN32
+extern "C" {
+    __declspec(dllexport) unsigned long NvOptimusEnablement = 0x00000001;
+    __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
+}
+#endif
+
 // ----------------------------------------------------------------------------
 int main(int argc, char** argv) {
     // --selftest: auto-plays for a few seconds, saves a screenshot, exits (for CI/headless checks)
@@ -2225,19 +2782,28 @@ int main(int argc, char** argv) {
     int frame = 0;
     int shotFrame = (selftest && argc > 2) ? atoi(argv[2]) : 900;
     while (!WindowShouldClose()) {
-        if (IsKeyPressed(KEY_ESCAPE)) { if (game.stageDialog) game.stageDialog = false; else break; }
+        if (IsKeyPressed(KEY_ESCAPE)) {
+            if (game.stageDialog) game.stageDialog = false;
+            else if (game.escMenu) game.escMenu = false;               // ESC again = resume
+            else if (game.mode == TITLE) break;                         // title screen: quit as before
+            else game.openEscMenu();
+        }
         if (IsKeyPressed(KEY_F11) || ((IsKeyDown(KEY_LEFT_ALT) || IsKeyDown(KEY_RIGHT_ALT)) && IsKeyPressed(KEY_ENTER)))
             ToggleBorderlessWindowed();
         float dt = std::min(GetFrameTime(), 1.0f / 30.0f);
         if (selftest) {
             dt = 1.0f / 60.0f;
-            if (frame % 8 == 0 && game.pBullets.size() < MAX_TORPEDOES && game.playerAlive)
-                game.pBullets.push_back({ { game.player.x, game.player.y - 26 }, { 0, -640 } });
+            game.autoFire = !getenv("SS_NOFIRE");
+            if (frame == 0 && getenv("SS_WEAPON")) { game.weapon = std::clamp(atoi(getenv("SS_WEAPON")), 0, W_COUNT - 1);
+                game.wlevel = getenv("SS_LEVEL") ? std::clamp(atoi(getenv("SS_LEVEL")), 0, 3) : 0; }
             game.player.x = W / 2.0f + sinf(frame * 0.02f) * 200;
             if (getenv("SS_GOD")) game.invuln = 0.05f;   // selftest-only invulnerability
+            if (getenv("SS_ESC") && frame == atoi(getenv("SS_ESC"))) { game.openEscMenu(); if (getenv("SS_ESCSEL")) game.escSel = atoi(getenv("SS_ESCSEL")); }
+            if (getenv("SS_ESCDO") && frame == atoi(getenv("SS_ESCDO"))) game.escChoose(game.escSel);
         }
         if (selftest && argc > 3 && std::string(argv[3]) == "break" && frame == shotFrame - 6 && game.shield) game.breakShield({ game.player.x, game.player.y - SHIELD_RADIUS });
         game.update(dt);
+        if (game.quitRequested) break;
         game.draw();
         if (selftest && ++frame == shotFrame) { TakeScreenshot("selftest.png"); break; }
     }

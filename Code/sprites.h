@@ -705,6 +705,55 @@ inline Texture2D planet(int N, int style, Vector3 c1, Vector3 c2, bool ring) {
     return render(N, P, rim);
 }
 
+// ================================================================ COURIER ==
+// Armoured cargo hauler carrying a weapon/upgrade package. Faces DOWN.
+// The cargo pod is rendered white-hot; the game tints it with the package colour.
+// damaged = outer armour plates blown off, cracks showing.
+inline Texture2D courier(int N, bool damaged) {
+    Vector3 steel = rgb(78, 84, 100), dark = rgb(44, 48, 60), gold = rgb(230, 185, 70);
+    std::vector<Part> P;
+    // engines (exhaust up)
+    P.push_back({ [](Vector2 p) { return sdCapsule(M(p), { 0.2f, -0.42f }, { 0.2f, -0.66f }, 0.09f, 0.07f); }, dark, 0.12f, 0.16f, 0.07f, 0.85f, 0.7f });
+    P.push_back({ [](Vector2 p) { return sdEllipse(M(p), { 0.2f, -0.68f }, { 0.07f, 0.035f }); }, rgb(255, 170, 70), 0.2f, 0.04f, 0.03f, 0, 0.3f, 1.6f });
+    // armour plates: inner pair always, outer pair only when intact
+    for (int k = 0; k < (damaged ? 1 : 2); ++k) {
+        float x0 = 0.3f + k * 0.24f;
+        P.push_back({ [=](Vector2 p) { Vector2 q = M(p);
+                          return std::min(sdPoly(q, { { x0, -0.36f }, { x0 + 0.24f, -0.28f }, { x0 + 0.24f, -0.03f }, { x0, -0.03f } }),
+                                          sdPoly(q, { { x0, 0.03f }, { x0 + 0.24f, 0.03f }, { x0 + 0.24f, 0.28f }, { x0, 0.36f } })) - 0.01f; },
+                      steel, 0.14f, 0.16f, 0.06f, 0.8f, 0.65f, 0, 1,
+                      [=](Vector2 p, float d, Vector3& c, float& h, float&) {
+                          if (d > -0.025f) c = gold;
+                          float r = fabsf(sinf(p.x * 47)) * fabsf(sinf(p.y * 31));
+                          if (r > 0.92f) { c = Vector3Scale(c, 0.6f); h -= 0.02f; }   // rivets
+                      } });
+    }
+    // main hull (octagon)
+    P.push_back({ [](Vector2 p) { return sdPoly(p, { { -0.18f, -0.55f }, { 0.18f, -0.55f }, { 0.32f, -0.38f }, { 0.32f, 0.38f },
+                                                     { 0.18f, 0.6f }, { -0.18f, 0.6f }, { -0.32f, 0.38f }, { -0.32f, -0.38f } }) - 0.02f; },
+                  steel, 0.24f, 0.32f, 0.18f, 0.8f, 0.7f, 0, 1,
+                  [=](Vector2 p, float d, Vector3& c, float& h, float& e) {
+                      Vector2 q = M(p);
+                      if (fabsf(p.y - 0.3f) < 0.025f || fabsf(p.y + 0.3f) < 0.025f) { h -= 0.03f; c = Vector3Scale(c, 0.5f); }
+                      if (p.y > 0.4f && p.y < 0.52f && sinf((q.x + p.y) * 40) > 0.2f) c = mix(c, rgb(240, 190, 40), 0.85f);   // hazard stripes
+                      if (d > -0.025f) c = gold;
+                      if (damaged) {
+                          float k = fabsf(sinf(p.x * 15 + sinf(p.y * 9) * 2.0f) * sinf(p.y * 13 + cosf(p.x * 8) * 1.6f));
+                          if (k < 0.05f) { c = rgb(255, 120, 40); e = 1.0f; h -= 0.05f; }
+                      }
+                  } });
+    // cargo bay frame + glowing pod
+    P.push_back({ [](Vector2 p) { return sdCircle(p, { 0, -0.02f }, 0.24f); }, dark, 0.45f, 0.12f, 0.06f, 0.9f, 0.8f, 0, 1,
+                  [=](Vector2 p, float, Vector3& c, float& h, float&) {
+                      float a = atan2f(p.y + 0.02f, p.x);
+                      if (sinf(a * 6) > 0.5f) { c = gold; h += 0.02f; } } });
+    P.push_back({ [](Vector2 p) { return sdCircle(p, { 0, -0.02f }, 0.15f); }, rgb(255, 255, 255), 0.6f, 0.14f, 0.1f, 0.0f, 1.0f, 1.2f });
+    // cockpit + chin gun
+    P.push_back({ [](Vector2 p) { return sdEllipse(p, { 0, 0.42f }, { 0.11f, 0.06f }); }, rgb(40, 90, 160), 0.5f, 0.1f, 0.05f, 0.2f, 1.0f, 0.2f });
+    P.push_back({ [](Vector2 p) { return sdCapsule(p, { 0, 0.55f }, { 0, 0.74f }, 0.04f, 0.025f); }, gold, 0.4f, 0.08f, 0.03f, 1, 0.9f });
+    return render(N, P, rgb(255, 210, 140));
+}
+
 // Soft radial glow (white, alpha falloff) for particles, bullets and flashes
 inline Texture2D glow(int N) {
     Image img = GenImageColor(N, N, BLANK);
