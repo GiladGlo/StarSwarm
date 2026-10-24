@@ -62,7 +62,7 @@ While you have the un-upgraded Photon Torpedo, half the packages are new weapons
 
 ## Stage structure, meteor fields, bosses & victory
 
-The game runs in 10 cycles of 6 stages: **4 alien waves → a meteor field → a boss**. Destroy the 10th boss (stage 60) to win.
+The game runs in 10 cycles of 6 stages: **4 alien waves → a meteor field → a boss**. Destroy the 10th boss (stage 60) to win. The **campaign bar** in the bottom-right corner shows the current stage out of 60 and your progress through the whole game, with a crest for each of the 10 bosses that turns gold once it's defeated (the next boss's crest pulses).
 
 **Alien waves:** each wave stage uses a different formation (Classic, Chevron, Diamond, Twin Pillars, Checkerboard, Ring, Arrowhead, Wings) and mixes six entry paths (swoops, side sweeps, loop-the-loops, rises from the bottom corners, spirals and figure-eights). New enemy types arrive gradually, two at first and then one more every other wave:
 

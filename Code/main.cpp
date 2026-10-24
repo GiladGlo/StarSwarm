@@ -2810,14 +2810,7 @@ struct Game {
         for (int i = 0; i < std::max(0, lives - (playerAlive ? 1 : 0)); ++i)
             drawShip(gfx.player, { 26.0f + i * 34, H - 22.0f }, 30, 0, false);
         if (mode == PLAYING || mode == VICTORY) drawWeaponIndicator();
-        for (int i = 0; i < stage && i < 12; ++i) {
-            int st = stage - i;
-            float x = W - 20.0f - i * 16;
-            StageKind k = stageKind(st);
-            DrawLineEx({ x, H - 34.0f }, { x, H - 8.0f }, 2, RAYWHITE);
-            DrawTriangle({ x, H - 34.0f }, { x, H - 24.0f }, { x + 11, H - 29.0f },
-                         k == SK_BOSS ? GOLD : (k == SK_METEORS ? Color{ 190, 130, 70, 255 } : RED));
-        }
+        if (mode == PLAYING || mode == VICTORY || mode == GAMEOVER) drawCampaignBar();
         if (boss.active && boss.state != B_ENTER) {
             float bw = 340, x = W / 2.0f - bw / 2, y = 76, f = std::max(0.0f, boss.hp / boss.maxHp);
             DrawRectangleRounded({ x - 3, y - 3, bw + 6, 16 }, 0.5f, 6, Color{ 0, 0, 0, 170 });
@@ -2834,6 +2827,36 @@ struct Game {
         }
         if (mode == GAMEOVER) DrawRectangle(0, H / 2 - 120, W, 240, Color{ 0, 0, 0, 170 });
         if (mode == VICTORY)  DrawRectangle(0, H / 2 - 170, W, 330, Color{ 0, 0, 0, 150 });
+    }
+
+    // Campaign bar (bottom right): progress through all 60 stages, one crest per boss (gold once defeated).
+    static constexpr float CB_X0 = 430, CB_X1 = 590, CB_Y = H - 18.0f;
+    void drawCrest(Vector2 c, float r, Color fill, Color line) {
+        Vector2 v[8] = { { c.x - r, c.y - r * 0.7f }, { c.x - r * 0.45f, c.y - r * 0.25f }, { c.x, c.y - r * 0.9f }, { c.x + r * 0.45f, c.y - r * 0.25f },
+                         { c.x + r, c.y - r * 0.7f }, { c.x + r * 0.75f, c.y + r * 0.35f }, { c.x, c.y + r }, { c.x - r * 0.75f, c.y + r * 0.35f } };
+        for (int i = 0; i < 8; ++i) { Vector2 a = v[i], b = v[(i + 1) % 8]; DrawTriangle(c, a, b, fill); DrawTriangle(c, b, a, fill); }
+        for (int i = 0; i < 8; ++i) DrawLineEx(v[i], v[(i + 1) % 8], 1.0f, line);
+    }
+    void drawCampaignBar() {
+        bool won = mode == VICTORY;
+        int bosses = won ? BOSS_COUNT : (stage - 1) / CYCLE;                 // bosses already defeated
+        float prog = won ? 1.0f : (stage - 0.5f) / FINAL_STAGE;
+        float x0 = CB_X0, x1 = CB_X1, y = CB_Y, hx = x0 + (x1 - x0) * prog;
+        DrawRectangleRounded({ x0, y - 3, x1 - x0, 6 }, 1, 8, Color{ 30, 32, 46, 230 });
+        DrawRectangleRounded({ x0, y - 3, std::max(6.0f, hx - x0), 6 }, 1, 8, Color{ 110, 210, 255, 255 });
+        DrawRectangleRoundedLinesEx({ x0, y - 3, x1 - x0, 6 }, 1, 8, 1, Color{ 80, 85, 110, 255 });
+        for (int b = 1; b <= BOSS_COUNT; ++b) {
+            float bx = x0 + (x1 - x0) * b * CYCLE / FINAL_STAGE;
+            bool done = b <= bosses, next = b == bosses + 1 && !won;
+            float pl = next ? 0.5f + 0.5f * sinf(time * 4) : 0;
+            Color fill = done ? GOLD : Color{ (unsigned char)(60 + 60 * pl), (unsigned char)(55 + 45 * pl), (unsigned char)(40 + 10 * pl), 255 };
+            drawCrest({ bx, y }, 4.5f, fill, done ? Color{ 255, 230, 150, 255 } : Color{ 120, 110, 80, 255 });
+        }
+        float pulse = 0.6f + 0.4f * sinf(time * 5) + (bannerTimer > 0 ? 0.6f * bannerTimer / 3.0f : 0);   // flares as a stage begins
+        BeginBlendMode(BLEND_ADDITIVE);
+        drawGlow({ hx, y }, 9 * pulse, Color{ 60, 150, 220, 220 });
+        drawGlow({ hx, y }, 3.5f, Color{ 220, 245, 255, 255 });
+        EndBlendMode();
     }
 
     // HUD text (drawn in screen space at native resolution)
@@ -2854,6 +2877,10 @@ struct Game {
         }
 
         text("1UP", 20, 10, 18, RED);
+        if (mode == PLAYING || mode == VICTORY || mode == GAMEOVER) {   // campaign bar labels
+            text(TextFormat("STAGE %d", mode == VICTORY ? FINAL_STAGE : stage), CB_X0, H - 44, 12, RAYWHITE);
+            text(TextFormat("/ %d", FINAL_STAGE), CB_X1 - 38, H - 41, 9, Color{ 150, 160, 190, 255 });
+        }
         if (mode == PLAYING && playerAlive)
             drawCentered(shield ? "SHIELD" : "SHIELD DOWN", H - 26, 16,
                  shield ? Color{ 110, 210, 255, 255 } : Color{ 140, 90, 90, 255 });
