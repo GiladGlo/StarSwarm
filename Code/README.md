@@ -46,17 +46,17 @@ From stage 2, every alien wave has one **Courier** in its formation: an armoured
 | New weapon (coloured icon) | Switch to that weapon class, keeping your upgrade level |
 | Upgrade (gold chevrons) | +1 level, up to Lv3; at Lv3 it's worth 1,000 points |
 
-While you still have the Photon Torpedo, half the packages are new weapons; once you've picked up a new weapon, 80 % are upgrades.
+While you have the un-upgraded Photon Torpedo, half the packages are new weapons; once you hold another weapon or an upgraded Photon, 80 % are upgrades. New-weapon drops come from a shuffle bag, so you see each of the other weapon classes once before any repeats.
 
 | Weapon | Behaviour | Limit (Lv0 → Lv3) |
 |---|---|---|
 | Photon Torpedo | the default; Lv2 fires 2, Lv3 fires 3 per volley | 5 → 7 volleys on screen |
 | Spread Cannon | fan of pellets, wider and denser with level | 3 → 7 pellets, 2 → 3 volleys |
 | Pulse Laser | continuous beam while held; builds heat and overheats (cool-down until the gauge drops). Lv3 pierces | beam width 4.5 → 11 |
-| Homing Swarm | mini-missiles that steer to the nearest enemy | 2 → 4 per shot, 6 → 10 on screen |
+| Homing Swarm | mini-missiles that steer to the nearest enemy; in meteor fields each one locks onto the closest rock ahead of your ship (or flies straight if there is none) | 2 → 4 per shot, 6 → 10 on screen |
 | Ion Burst | slow orb that explodes in an area; Lv3 chains lightning to 3 more enemies | 2 → 3 orbs on screen |
 
-**Losing a life** costs one upgrade level (at Lv0 you drop back to the Photon Torpedo). **After every boss** your systems reset to the Photon Torpedo Lv0. The compact indicator next to your spare ships shows the current weapon, its level (dots) and the laser heat gauge.
+**Losing a life** costs one upgrade level (at Lv0 you drop back to the Photon Torpedo). Your weapon and level carry over between stages, bosses included. The compact indicator next to your spare ships shows the current weapon, its level (dots) and the laser heat gauge.
 
 ## Stage structure, meteor fields, bosses & victory
 

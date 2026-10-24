@@ -389,6 +389,7 @@ struct Game {
     std::vector<Warning>  warnings;
     std::vector<Package>  packages;
     std::vector<Lightning> zaps;
+    std::vector<int> weaponBag;                 // shuffle bag of weapon drops: each class once before any repeats
     int   weapon = W_PHOTON, wlevel = 0;        // current weapon class and upgrade level (0..3)
     float heat = 0, laserTick = 0, laserTop = 0;
     bool  overheated = false, laserOn = false;
@@ -444,9 +445,21 @@ struct Game {
         lives = 3; score = 0; stage = std::clamp(startStage, 1, FINAL_STAGE) - 1; nextLifeAt = 20000; shotsFired = hits = 0;
         playerAlive = true; player = { W / 2.0f, H - 70.0f }; invuln = 0;
         pBullets.clear(); eBullets.clear(); parts.clear(); rings.clear(); popups.clear(); meteors.clear(); meteorField = false;
-        packages.clear(); zaps.clear(); weapon = W_PHOTON; wlevel = 0; heat = 0; overheated = false;
+        packages.clear(); zaps.clear(); weapon = W_PHOTON; wlevel = 0; heat = 0; overheated = false; weaponBag.clear();
         mode = PLAYING; shield = false; boss.active = false;
         nextStage();
+    }
+
+    // Next weapon class for a Courier to carry: drawn from a shuffled bag of the four classes,
+    // skipping the one you hold; the bag refills (reshuffled) once it runs out.
+    int nextBagWeapon() {
+        for (int pass = 0; pass < 2; ++pass) {
+            for (size_t i = 0; i < weaponBag.size(); ++i)
+                if (weaponBag[i] != weapon) { int w = weaponBag[i]; weaponBag.erase(weaponBag.begin() + i); return w; }
+            weaponBag = { W_SPREAD, W_PULSE, W_HOMING, W_ION };
+            for (int i = (int)weaponBag.size() - 1; i > 0; --i) std::swap(weaponBag[i], weaponBag[GetRandomValue(0, i)]);
+        }
+        return W_SPREAD;
     }
 
     void raiseShield() {
@@ -517,10 +530,9 @@ struct Game {
             e.hp = (e.type == BOSS || e.type == SHIELDED) ? 2 : 1;
             if (e.type == COURIER) {
                 e.hp = 8 + std::min(4, cyc);
-                // what it carries: 50/50 while on the basic weapon, 80% upgrades once you hold a new weapon
-                float pWeapon = weapon == W_PHOTON ? 0.5f : 0.2f;
-                if (frand(0, 1) < pWeapon) { do { e.cargo = GetRandomValue(W_SPREAD, W_ION); } while (e.cargo == weapon); }
-                else e.cargo = -1;
+                // what it carries: 50/50 while on the un-upgraded basic weapon, 80% upgrades otherwise
+                float pWeapon = (weapon == W_PHOTON && wlevel == 0) ? 0.5f : 0.2f;
+                e.cargo = frand(0, 1) < pWeapon ? nextBagWeapon() : -1;
                 e.fireT = frand(2.5f, 3.5f);
             }
             e.maxHp = e.hp;
@@ -809,10 +821,6 @@ struct Game {
                 rings.push_back({ b.core(), 0.9f, 0.9f, 260, Color{ 255, 120, 220, 255 } });
                 rings.push_back({ b.core(), 0.6f, 0.6f, 160, Color{ 255, 230, 180, 255 } });
                 shake = 1.0f;
-                if (weapon != W_PHOTON || wlevel > 0) {   // after every boss the arsenal resets to the basic weapon
-                    weapon = W_PHOTON; wlevel = 0; heat = 0; overheated = false;
-                    popups.push_back({ { W / 2.0f - 120, b.pos.y + 40 }, 2.5f, "SYSTEMS RESET - PHOTON TORPEDO" });
-                }
                 int bonus = 5000 * (b.index + 1);
                 addScore(bonus);
                 popups.push_back({ { W / 2.0f - 130, b.pos.y }, 2.5f, TextFormat("%s DESTROYED  +%d", b.D().name, bonus) });
@@ -1560,13 +1568,32 @@ struct Game {
             if (b.kind == PB_HOMING) {          // steer toward the nearest target
                 static const float turnR[4] = { 3.5f, 5.0f, 5.0f, 6.0f };
                 Vector2 tgt{ -1, -1 }; float best = 1e9f;
+                if (stageKind(stage) == SK_METEORS && !boss.active) {
+                    // meteor field: lock onto the closest rock ahead of the ship (35 deg cone, 350 range); keep it until
+                    // it's destroyed, then re-acquire by the same rule; with no target, fly straight up
+                    const Meteor* lock = nullptr;
+                    if (b.aux > 0) for (auto& m : meteors) if (m.id == (int)b.aux - 1) { lock = &m; break; }
+                    if (!lock) {
+                        b.aux = 0;
+                        for (auto& m : meteors) {
+                            Vector2 d = Vector2Subtract(m.pos, player);
+                            float dist = Vector2Length(d);
+                            if (d.y >= 0 || dist > 350 + m.r() || fabsf(atan2f(d.x, -d.y)) > 35 * DEG2RAD) continue;
+                            if (dist < best) { best = dist; lock = &m; }
+                        }
+                        if (lock) b.aux = (float)(lock->id + 1);
+                    }
+                    if (lock) tgt = lock->pos;
+                    else tgt = { b.pos.x, b.pos.y - 1000 };
+                } else
                 for (auto& e : enemies) {
                     if (e.state == DEAD || e.state == WAITING) continue;
                     float d = Vector2Distance(e.pos, b.pos); if (e.pos.y < b.pos.y + 40 && d < best) { best = d; tgt = e.pos; } }
                 if (boss.active && boss.state == B_FIGHT) { float d = Vector2Distance(boss.core(), b.pos); if (d < best) { best = d; tgt = boss.core(); } }
-                for (auto& m : meteors) { float d = Vector2Distance(m.pos, b.pos); if (m.pos.y < b.pos.y + 40 && d < best) { best = d; tgt = m.pos; } }
+                if (stageKind(stage) != SK_METEORS || boss.active)
+                    for (auto& m : meteors) { float d = Vector2Distance(m.pos, b.pos); if (m.pos.y < b.pos.y + 40 && d < best) { best = d; tgt = m.pos; } }
                 float cur = atan2f(b.vel.y, b.vel.x);
-                if (tgt.x >= 0) {
+                if (tgt.x >= 0 || tgt.y < -100) {
                     float want = atan2f(tgt.y - b.pos.y, tgt.x - b.pos.x);
                     float d = fmodf(want - cur + 3 * PI, 2 * PI) - PI, turn = turnR[wlevel] * dt;
                     cur += std::clamp(d, -turn, turn);
