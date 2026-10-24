@@ -393,6 +393,7 @@ struct Game {
     std::vector<Package>  packages;
     std::vector<Lightning> zaps;
     std::vector<int> weaponBag;                 // shuffle bag of weapon drops: each class once before any repeats
+    int   lastOffered = -1;                     // last weapon class a Courier carried (never offered twice in a row)
     int   weapon = W_PHOTON, wlevel = 0;        // current weapon class and upgrade level (0..3)
     float heat = 0, laserTick = 0, laserTop = 0;
     bool  overheated = false, laserOn = false;
@@ -449,21 +450,23 @@ struct Game {
         lives = 3; score = 0; stage = std::clamp(startStage, 1, FINAL_STAGE) - 1; nextLifeAt = 20000; shotsFired = hits = 0;
         playerAlive = true; player = { W / 2.0f, H - 70.0f }; invuln = 0; roll = 0; prevPX = player.x; warpT = WARP_TIME;
         pBullets.clear(); eBullets.clear(); parts.clear(); rings.clear(); popups.clear(); meteors.clear(); meteorField = false;
-        packages.clear(); zaps.clear(); weapon = W_PHOTON; wlevel = 0; heat = 0; overheated = false; weaponBag.clear();
+        packages.clear(); zaps.clear(); weapon = W_PHOTON; wlevel = 0; heat = 0; overheated = false; weaponBag.clear(); lastOffered = -1;
         mode = PLAYING; shield = false; boss.active = false;
         nextStage();
     }
 
     // Next weapon class for a Courier to carry: drawn from a shuffled bag of the four classes,
     // skipping the one you hold; the bag refills (reshuffled) once it runs out.
+    // Also skips the class offered last time, so the first pick of a fresh bag can't repeat the previous pick.
     int nextBagWeapon() {
         for (int pass = 0; pass < 2; ++pass) {
             for (size_t i = 0; i < weaponBag.size(); ++i)
-                if (weaponBag[i] != weapon) { int w = weaponBag[i]; weaponBag.erase(weaponBag.begin() + i); return w; }
+                if (weaponBag[i] != weapon && weaponBag[i] != lastOffered) {
+                    int w = weaponBag[i]; weaponBag.erase(weaponBag.begin() + i); return lastOffered = w; }
             weaponBag = { W_SPREAD, W_PULSE, W_HOMING, W_ION };
             for (int i = (int)weaponBag.size() - 1; i > 0; --i) std::swap(weaponBag[i], weaponBag[GetRandomValue(0, i)]);
         }
-        return W_SPREAD;
+        return lastOffered = (weapon == W_SPREAD ? W_HOMING : W_SPREAD);
     }
 
     void raiseShield() {
