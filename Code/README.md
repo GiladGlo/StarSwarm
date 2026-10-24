@@ -106,3 +106,7 @@ On the title screen press **Ctrl+L** to open a dialog and start at any stage (1â
 | Boss (green, 2 hits) | 150 | 400 |
 
 Extra ship at 20,000, then every 50,000. Each stage gets faster, with more simultaneous divers and more enemy fire.
+
+## GitHub auto-push
+
+Run `Code\tools\setup-autopush.cmd` once: it does the first push to https://github.com/GiladGlo/StarSwarm and creates a Windows scheduled task (*StarSwarm AutoPush*) that every 15 minutes commits any pending changes and pushes new commits, silently. Activity is logged in `autopush.log` (repo root, not committed). Remove with `schtasks /Delete /TN "StarSwarm AutoPush" /F`.
