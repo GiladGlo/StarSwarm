@@ -1118,4 +1118,72 @@ inline Texture2D wingDrone(int N) {
 }
 
 
+// Mining outpost bolted onto a large asteroid (transparent overlay drawn over a non-tumbling rock;
+// the radar dish and beacons are animated at runtime).
+inline Texture2D miningOutpost(int N) {
+    Vector3 white = rgb(210, 214, 222), grey = rgb(120, 126, 140), dark = rgb(48, 52, 62), orange = rgb(240, 140, 40), solar = rgb(40, 70, 150);
+    std::vector<Part> P;
+    // solar boom + arrays (upper right)
+    P.push_back({ [](Vector2 p) { return sdCapsule(p, { 0.12f, -0.22f }, { 0.62f, -0.5f }, 0.018f, 0.018f); }, grey, 0.32f, 0.03f, 0.02f, 0.9f, 0.7f });
+    for (float t : { 0.5f, 0.78f })
+        P.push_back({ [=](Vector2 p) { Vector2 c = Vector2Lerp({ 0.12f, -0.22f }, { 0.62f, -0.5f }, t);
+                          Vector2 q = rot(Vector2Subtract(p, c), -29); return std::max(fabsf(q.x) - 0.07f, fabsf(q.y) - 0.15f); },
+                      solar, 0.34f, 0.02f, 0.01f, 0.6f, 1.0f, 0, 1,
+                      [=](Vector2 p, float d, Vector3& c, float& h, float& e) {
+                          Vector2 cc = Vector2Lerp({ 0.12f, -0.22f }, { 0.62f, -0.5f }, t); Vector2 q = rot(Vector2Subtract(p, cc), -29);
+                          float gx = q.x * 40 - floorf(q.x * 40), gy = q.y * 30 - floorf(q.y * 30);
+                          if (gx < 0.12f || gy < 0.12f) c = grey; else c = mix(solar, rgb(90, 140, 230), 0.3f * (q.y + 0.15f) / 0.3f);
+                          if (d > -0.008f) { c = white; }
+                          (void)h; (void)e; } });
+    // pipes
+    for (auto seg : { std::pair<Vector2, Vector2>{ { -0.3f, -0.08f }, { -0.22f, 0.3f } }, std::pair<Vector2, Vector2>{ { 0.1f, -0.06f }, { 0.28f, 0.12f } } })
+        P.push_back({ [=](Vector2 p) { return sdCapsule(p, seg.first, seg.second, 0.022f, 0.022f); }, grey, 0.26f, 0.04f, 0.02f, 0.9f, 0.8f, 0, 1,
+                      [=](Vector2 p, float, Vector3& c, float& h, float&) { if (fabsf(sinf((p.x + p.y) * 70)) < 0.2f) { c = dark; h -= 0.004f; } } });
+    // habitat module (horizontal cylinder) with lit windows
+    P.push_back({ [](Vector2 p) { return sdCapsule(p, { -0.42f, -0.1f }, { 0.16f, -0.1f }, 0.1f, 0.1f); }, white, 0.3f, 0.14f, 0.08f, 0.6f, 0.85f, 0, 1,
+                  [=](Vector2 p, float d, Vector3& c, float& h, float& e) {
+                      float s = p.x * 14 - floorf(p.x * 14);
+                      if (s < 0.08f) { c = grey; h -= 0.01f; }
+                      if (fabsf(p.y + 0.1f) < 0.022f && s > 0.3f && s < 0.7f) { bool lit = hash2(floorf(p.x * 14), 3) > 0.25f; c = lit ? rgb(255, 215, 140) : dark; e = lit ? 0.9f : 0; }
+                      if (fabsf(p.y + 0.16f) < 0.012f) c = orange;               // hazard stripe
+                      if (d > -0.015f) c = Vector3Scale(c, 0.8f);
+                  } });
+    // command dome
+    P.push_back({ [](Vector2 p) { return sdCircle(p, { 0.3f, 0.16f }, 0.15f); }, rgb(90, 160, 220), 0.38f, 0.18f, 0.1f, 0.3f, 1.0f, 0.2f, 1,
+                  [=](Vector2 p, float d, Vector3& c, float& h, float& e) {
+                      if (d > -0.025f) { c = white; e = 0; return; }
+                      float r = Vector2Distance(p, { 0.3f, 0.16f }) / 0.15f;
+                      c = mix(rgb(160, 220, 255), rgb(40, 90, 170), r);
+                      if (fabsf(sinf(atan2f(p.y - 0.16f, p.x - 0.3f) * 3)) < 0.08f) c = Vector3Scale(white, 0.8f);   // dome ribs
+                      if (r < 0.35f) { c = mix(c, rgb(255, 230, 160), 0.6f); e = 0.6f; }   // lit interior
+                      (void)h;
+                  } });
+    // drill rig with glowing borehole
+    P.push_back({ [](Vector2 p) { return sdCircle(p, { -0.22f, 0.38f }, 0.11f); }, dark, 0.22f, 0.04f, 0.03f, 0.4f, 0.5f, 0, 1,
+                  [](Vector2 p, float d, Vector3& c, float& h, float& e) { float r = Vector2Distance(p, { -0.22f, 0.38f }) / 0.11f;
+                      if (r < 0.55f) { c = mix(rgb(255, 230, 140), rgb(255, 90, 20), r / 0.55f); e = 1.2f * (1 - r); h -= 0.03f; }
+                      else if (d > -0.02f) { float a = atan2f(p.y - 0.38f, p.x + 0.22f); c = fmodf(a * 4 + 10, 1.f) < 0.5f ? rgb(240, 180, 40) : rgb(30, 30, 30); } } });
+    P.push_back({ [](Vector2 p) { Vector2 q = { p.x + 0.22f, p.y - 0.2f }; return std::max(fabsf(q.x) - 0.05f, fabsf(q.y) - 0.13f); }, orange, 0.36f, 0.06f, 0.03f, 0.7f, 0.7f, 0, 1,
+                  [](Vector2 p, float, Vector3& c, float& h, float&) { float v = (p.x + p.y) * 30; if (v - floorf(v) < 0.5f) c = rgb(40, 40, 46); (void)h; } });
+    // landing pad with a light ring
+    P.push_back({ [](Vector2 p) { return sdCircle(p, { 0.05f, 0.42f }, 0.13f); }, grey, 0.26f, 0.03f, 0.02f, 0.8f, 0.6f, 0, 1,
+                  [=](Vector2 p, float d, Vector3& c, float& h, float& e) { float r = Vector2Distance(p, { 0.05f, 0.42f }) / 0.13f;
+                      c = Vector3Scale(grey, 0.8f); if (fabsf(r - 0.55f) < 0.06f) c = rgb(240, 200, 60);
+                      if (fabsf(p.x - 0.05f) < 0.012f && fabsf(p.y - 0.42f) < 0.05f) c = white;
+                      if (fabsf(p.y - 0.42f) < 0.012f && fabsf(p.x - 0.05f) < 0.05f) c = white;
+                      if (r > 0.82f) { float a = atan2f(p.y - 0.42f, p.x - 0.05f); if (fmodf(a * 8 / (2 * PI) + 8, 1.f) < 0.3f) { c = rgb(120, 255, 160); e = 0.9f; } }
+                      (void)d; (void)h; } });
+    // ore containers
+    for (int k = 0; k < 4; ++k) {
+        Vector2 cc{ -0.58f + (k % 2) * 0.1f, 0.06f + (k / 2) * 0.1f };
+        Vector3 cc_col = k % 3 == 0 ? rgb(230, 170, 50) : (k % 3 == 1 ? rgb(200, 80, 50) : rgb(90, 140, 200));
+        P.push_back({ [=](Vector2 p) { return std::max(fabsf(p.x - cc.x) - 0.042f, fabsf(p.y - cc.y) - 0.042f); }, cc_col, 0.3f, 0.04f, 0.02f, 0.5f, 0.6f, 0, 1,
+                      [=](Vector2 p, float d, Vector3& c, float& h, float&) { if (d > -0.008f || fabsf(sinf((p.x - cc.x) * 90)) < 0.25f) c = Vector3Scale(c, 0.6f); (void)h; } });
+    }
+    // dish mount (the dish itself spins at runtime)
+    P.push_back({ [](Vector2 p) { return sdCircle(p, { -0.48f, -0.32f }, 0.05f); }, grey, 0.34f, 0.05f, 0.03f, 0.9f, 0.8f });
+    return render(N, P, { 0.5f, 0.6f, 0.8f }, nullptr, true);
+}
+
+
 } // namespace spr

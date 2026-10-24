@@ -67,6 +67,7 @@ struct Gfx {
     Texture2D meteor[7]{};                             // 3D tumble atlases (m3d); [6] = volatile rock
     Texture2D courier[2]{};                            // [1] = armour blown off
     Texture2D drone{};                                 // wingman drone
+    Texture2D outpost{};                               // mining-outpost overlay
     Texture2D planet[10]{};                            // one backdrop body per boss cycle
     bool planetLoaded[10]{};
     Texture2D bossTex[10]{};
@@ -89,6 +90,7 @@ struct Gfx {
         }
         courier[0] = spr::courier(N, false); courier[1] = spr::courier(N, true);
         drone = spr::wingDrone(N);
+        outpost = spr::miningOutpost(384);
         glow = spr::glow(64);
         nebula = spr::nebula(300, 400);
     }
@@ -136,7 +138,7 @@ struct Gfx {
             UnloadTexture(*t);
         for (int i = 0; i < 10; ++i) if (bossLoaded[i]) UnloadTexture(bossTex[i]);
         for (auto& m : meteor) UnloadTexture(m);
-        for (Texture2D* t : { &courier[0], &courier[1], &drone }) UnloadTexture(*t);
+        for (Texture2D* t : { &courier[0], &courier[1], &drone, &outpost }) UnloadTexture(*t);
         for (int i = 0; i < 10; ++i) if (planetLoaded[i]) UnloadTexture(planet[i]);
     }
 };
@@ -428,6 +430,7 @@ struct Meteor {
     Vector2 pos, vel; float rot, spin, flash = 0; MSize size; int variant;
     float fuse = 0;   // >0: caught in a blast, detonates when it runs out
     int   id = 0;
+    bool  outpost = false;   // carries a mining outpost: stabilised (slow 2D turn instead of a tumble)
     float r() const { return METEOR_R[size]; }
     bool  volatileRock() const { return variant == VOLATILE_VARIANT; }
 };
@@ -453,6 +456,7 @@ struct Game {
     bool  meteorField = false;
     int   nextMeteorId = 1;
     float fieldT = 0, fieldDur = 30, spawnT = 0, targetDensity = 0.35f;
+    int   outpostsSpawned = 0;                  // mining outposts released this field (one at ~30%, ~60%, ~90%)
     Boss                  boss;
     std::vector<Popup>    popups;
     std::vector<Star>     stars;
@@ -533,6 +537,13 @@ struct Game {
         return lastOffered = (weapon == W_SPREAD ? W_HOMING : W_SPREAD);
     }
 
+    // What a Courier / mining outpost carries: 50/50 new weapon vs upgrade while on the un-upgraded basic weapon,
+    // 80% upgrades otherwise; new weapons come from the shuffle bag.
+    int rollCargo() {
+        float pWeapon = (weapon == W_PHOTON && wlevel == 0) ? 0.5f : 0.2f;
+        return frand(0, 1) < pWeapon ? nextBagWeapon() : -1;
+    }
+
     void raiseShield() {
         if (shield) return;
         shield = true; shieldGrow = 0; shieldHitFlash = 0; shieldRegen = 0;
@@ -601,9 +612,7 @@ struct Game {
             e.hp = (e.type == BOSS || e.type == SHIELDED) ? 2 : 1;
             if (e.type == COURIER) {
                 e.hp = 8 + std::min(4, cyc);
-                // what it carries: 50/50 while on the un-upgraded basic weapon, 80% upgrades otherwise
-                float pWeapon = (weapon == W_PHOTON && wlevel == 0) ? 0.5f : 0.2f;
-                e.cargo = frand(0, 1) < pWeapon ? nextBagWeapon() : -1;
+                e.cargo = rollCargo();
                 e.fireT = frand(2.5f, 3.5f);
             }
             e.maxHp = e.hp;
@@ -651,7 +660,7 @@ struct Game {
     int cycleIndex() const { return std::clamp((stage - 1) / CYCLE, 0, BOSS_COUNT - 1); }
 
     void startMeteorField() {
-        meteorField = true; fieldT = 0; spawnT = 0;
+        meteorField = true; fieldT = 0; spawnT = 0; outpostsSpawned = 0;
         gfx.ensureBoss(std::clamp((stage + 1) / CYCLE - 1, 0, BOSS_COUNT - 1));   // build the coming boss now
         fieldDur = 30.0f + 2.0f * cycleIndex();
         targetDensity = std::min(0.45f, 0.30f + 0.017f * cycleIndex());
@@ -688,7 +697,24 @@ struct Game {
 
     // Any hit on a rock: volatile rocks detonate, ordinary rocks split
     void hitMeteor(size_t idx, Vector2 hitDir) {
+        if (meteors[idx].outpost) destroyOutpost(meteors[idx]);
         if (meteors[idx].volatileRock()) detonateMeteor(idx); else breakMeteor(idx, hitDir);
+    }
+
+    // Mining outpost blown off its rock: explosion, metal debris, 500 points and a package (Courier odds).
+    // The rock itself then breaks up like any large asteroid.
+    void destroyOutpost(Meteor& m) {
+        m.outpost = false;
+        explode(m.pos, Color{ 255, 200, 120, 255 }, Color{ 240, 140, 40, 255 }, 40, 300);
+        rings.push_back({ m.pos, 0.45f, 0.45f, 130, Color{ 255, 180, 90, 255 } });
+        for (int i = 0; i < 30; ++i) { float a = frand(0, 2 * PI), sp = frand(60, 280), life = frand(0.4f, 1.0f);
+            parts.push_back({ m.pos, { cosf(a) * sp, sinf(a) * sp }, life, life, frand(2, 4),
+                              GetRandomValue(0, 2) ? Color{ 200, 205, 215, 255 } : Color{ 240, 140, 40, 255 }, DEBRIS, frand(0, 360), frand(-700, 700) }); }
+        shake = std::max(shake, 0.3f);
+        PlaySound(sfx[SFX_BOOM]);
+        addScore(500);
+        popups.push_back({ { m.pos.x - 30, m.pos.y - 14 }, 1.2f, "OUTPOST +500" });
+        packages.push_back({ { m.pos.x, m.pos.y + 6 }, rollCargo(), 0 });
     }
 
     // Volatile rock explodes: destroyed outright (no fragments), and every rock within
@@ -758,6 +784,12 @@ struct Game {
         if (meteorField && fieldT < fieldDur && mode == PLAYING) {
             spawnT -= dt;
             if (spawnT <= 0) { spawnT = 0.12f; if (density() < targetDensity) spawnMeteor(); }
+            if (outpostsSpawned < 3 && fieldT >= fieldDur * 0.3f * (outpostsSpawned + 1)) {   // mining outposts at ~30/60/90%
+                ++outpostsSpawned;
+                Meteor m{ { frand(90, W - 90.0f), -METEOR_R[M_LARGE] - 20 }, { frand(-10, 10), 38 }, frand(0, 360), frand(5, 8) * (GetRandomValue(0, 1) ? 1 : -1), 0, M_LARGE, 0 };
+                m.outpost = true;
+                addMeteor(m);
+            }
         }
         for (auto& m : meteors) {
             m.pos = Vector2Add(m.pos, Vector2Scale(m.vel, dt));
@@ -784,6 +816,32 @@ struct Game {
         }
     }
 
+    // Outpost rock: stabilised (fixed rock frame, slow 2D turn) with the station overlay, spinning radar dish,
+    // blinking beacons, glowing drill and ore sparks streaming into the borehole.
+    void drawOutpost(const Meteor& m, float S) {
+        const Texture2D& rock = gfx.meteor[m.variant];
+        m3d::draw(rock, 0, { m.pos.x + S * 0.12f, m.pos.y + S * 0.18f }, S * 0.95f, m.rot, Color{ 0, 0, 0, 110 }, false);
+        m3d::draw(rock, 0, m.pos, S, m.rot, WHITE, false);
+        const Texture2D& st = gfx.outpost;
+        DrawTexturePro(st, { 0, 0, (float)st.width, (float)st.height }, { m.pos.x, m.pos.y, S, S }, { S / 2, S / 2 }, m.rot, WHITE);
+        float a = m.rot * DEG2RAD;
+        auto L = [&](Vector2 u) { Vector2 q{ u.x * S * 0.5f, u.y * S * 0.5f }; return Vector2{ m.pos.x + q.x * cosf(a) - q.y * sinf(a), m.pos.y + q.x * sinf(a) + q.y * cosf(a) }; };
+        Vector2 dc = L({ -0.48f, -0.32f }); float da = time * 3 + m.id;
+        float rx = 2 + 8 * fabsf(cosf(da));
+        DrawEllipse((int)dc.x, (int)dc.y, rx, 8, Color{ 220, 225, 235, 255 });
+        DrawEllipseLines((int)dc.x, (int)dc.y, rx, 8, Color{ 90, 95, 110, 255 });
+        BeginBlendMode(BLEND_ADDITIVE);
+        float t = time + m.id * 0.37f;
+        if (fmodf(t, 1.2f) < 0.1f) drawGlow(L({ 0.64f, -0.52f }), 8, Color{ 255, 60, 60, 255 });
+        if (fmodf(t + 0.6f, 1.2f) < 0.1f) drawGlow(L({ -0.42f, -0.1f }), 7, Color{ 80, 255, 120, 255 });
+        if (fmodf(t + 0.3f, 0.9f) < 0.08f) drawGlow(L({ -0.22f, 0.04f }), 9, Color{ 255, 255, 255, 255 });
+        drawGlow(L({ -0.22f, 0.38f }), 11 + 2 * sinf(t * 12), Color{ 255, 140, 40, 140 });
+        for (int k = 0; k < 4; ++k) { float u = fmodf(t * 1.5f + k * 0.25f, 1.f);
+            drawGlow(Vector2Lerp(L({ -0.22f, 0.62f }), L({ -0.22f, 0.38f }), u), 3, Color{ 255, 200, 120, (unsigned char)(200 * (1 - u)) }); }
+        if (m.flash > 0) drawGlow(m.pos, S * 0.5f, Color{ 255, 220, 180, (unsigned char)(160 * m.flash / 0.12f) });
+        EndBlendMode();
+    }
+
     void drawMeteors() {
         for (const auto& m : meteors) {
             float S = m.r() * 2 / 0.8f;
@@ -795,6 +853,7 @@ struct Game {
                 EndBlendMode();
             }
             S *= 1.08f;
+            if (m.outpost) { drawOutpost(m, S); continue; }
             float tilt = (float)((m.id * 53) % 40 - 20);   // fixed per-rock orientation; the tumble is in the atlas
             const Texture2D& tex = gfx.meteor[m.variant];
             m3d::draw(tex, m.rot, { m.pos.x + S * 0.12f, m.pos.y + S * 0.18f }, S * 0.95f, tilt, Color{ 0, 0, 0, 110 }, false);   // shadow
