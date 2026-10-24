@@ -29,7 +29,7 @@ The title rotates between **STAR SWARM**, **Developed by Gilad Globen** and **De
 
 | Key | Action |
 |---|---|
-| ← → ↑ ↓ / W A S D | Move (up/down within the lower part of the screen; the ship always stays fully on screen) |
+| ← → ↑ ↓ / W A S D | Move (up/down within the lower ~60% of the screen; the ship always stays fully on screen) |
 | Space | Fire (hold to keep firing; each weapon has its own on-screen limit) |
 | P | Pause |
 | Esc | Pause menu: **Resume game**, **End current game** (back to the title screen) or **Exit to desktop**. Pick with ↑/↓ + Enter, keys 1–3 or the mouse; Esc again resumes. On the title screen Esc quits |
@@ -96,6 +96,8 @@ Each 6-stage cycle has its own look: sky colours, nebula tint and a distant plan
 **Boss weapons:** Plasma Fan (pulsing orb fans), Hunter Volley (aimed tracer bolts), Swarm Launch (fighters emerge from glowing hatches), Vortex Spiral (colour-shifting spiral arms with ribbon trails), Lance Beam (charged prow laser), Seeker Missiles (homing missiles with lock-on reticle; they detonate when out of fuel), Nova Ring (spinning crystals riding an expanding shockwave), Twin Pillars (two fixed beams), Meteor Storm (tumbling rocks; red markers at the top warn where each will enter) and Scythe Beam (a beam that leans and leaves a burn line as the boss sweeps). Every gun shows a muzzle flash when it fires.
 
 **Boss detail:** every boss is built while you fly the meteor field before it, with plated, greebled hulls (equipment boxes, vents, hatches, pipes, lit window rows, a framed bridge canopy), weathering and self-shadowing; HYDRA has domed chitin scales, veins and glowing pustules. At runtime the reactor core beats like a heart (double pulse with shockwave rings) inside counter-rotating containment arcs with plasma crackle, navigation lights strobe red/green with a white keel beacon, and engine plumes flicker. The heartbeat quickens as the boss is damaged, and below half health its hull sparks, smokes and (below a quarter) burns.
+
+**Hyperspace jump:** after each boss (except the last) a window tears open ahead of you, tilted so you can see into its tunnel; the stars stretch into hyperspace streaks along the window's axis, your ship lines up and dives into the tunnel, the window snaps shut with a flash, and you warp in at the next stage (about 4 s, no control or danger during the jump).
 
 Bosses get more aggressive as their health bar drops (pink → orange → red). Lasers are telegraphed by a flickering targeting line. Destroying boss *n* awards 5,000 × *n*; each torpedo hit is worth 10.
 

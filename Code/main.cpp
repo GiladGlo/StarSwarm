@@ -25,7 +25,7 @@ static const float  SHIELD_RADIUS = 32.0f;       // force-field bubble radius
 // Player movement area: the ship (wingtips +-23, nose -25, plume below) always stays fully on screen.
 static const float  PLAYER_MARGIN_X = 34.0f;      // keep the whole ship and its shield bubble inside the sides
 static const float  PLAYER_Y_LOW    = 800 - 70.0f;   // lowest position (the original fixed row)
-static const float  PLAYER_Y_HIGH   = 800 - 330.0f;  // how far up the ship may fly (lower ~40% of the screen)
+static const float  PLAYER_Y_HIGH   = 800 - 490.0f;  // how far up the ship may fly (lower ~60% of the screen)
 static const size_t MAX_TORPEDOES = 5;          // projectiles allowed on screen at once
 static const char* HISCORE_FILE = "starswarm_highscore.txt";
 
@@ -429,6 +429,11 @@ struct Game {
     bool  debugRun = false;                  // started from the Ctrl+L stage select: high score is not recorded
     bool  stageDialog = false;               // Ctrl+L debug stage-select dialog
     std::string dlgText = "1";
+    float hyperT = -1;                          // >=0: hyperspace jump in progress (seconds since it began)
+    bool  hyperSwitched = false;                // next stage already started during the jump
+    Vector2 hyperStart{};
+    struct HStar { float lx, ly, s; };
+    std::vector<HStar> hstars;
     float fireworkT = 0, clearT = 0, cycleT = 0;   // cycleT: time within the current boss cycle (backdrop drift)
 
     // --- formation geometry -------------------------------------------------
@@ -456,6 +461,7 @@ struct Game {
         lives = 3; score = 0; stage = std::clamp(startStage, 1, FINAL_STAGE) - 1; nextLifeAt = 20000; shotsFired = hits = 0;
         playerAlive = true; player = { W / 2.0f, PLAYER_Y_LOW }; invuln = 0; roll = 0; prevPX = player.x; warpT = WARP_TIME;
         pBullets.clear(); eBullets.clear(); parts.clear(); rings.clear(); popups.clear(); meteors.clear(); meteorField = false;
+        hyperT = -1;
         packages.clear(); zaps.clear(); weapon = W_PHOTON; wlevel = 0; heat = 0; overheated = false; weaponBag.clear(); lastOffered = -1;
         mode = PLAYING; shield = false; boss.active = false;
         nextStage();
@@ -1253,6 +1259,123 @@ struct Game {
         EndBlendMode();
     }
 
+    // ================================================================ HYPERSPACE JUMP ==
+    // After each boss (~4 s): a window tears open ahead, the stars stretch into hyperspace streaks, the ship lines up and
+    // flies into the window's tunnel, the window snaps shut with a flash, and the next stage begins (ship warps in).
+    // The window ring, its tunnel, the streaks and the ship's dive share one perspective camera and one travel axis.
+    static constexpr float HYPER_SWITCH = 3.3f, HYPER_END = 4.0f, HYP_TILT = 32 * DEG2RAD, HYP_CAM = 500;
+    static constexpr Vector3 HYP_D = { 0, 0.12f, -0.9928f };       // travel axis: into the screen, slightly up
+    static constexpr Vector2 HYP_PC = { W / 2.0f, 300 };
+    static float hs(float a, float b, float x) { float t = Clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); }
+    static Vector2 hproj(Vector3 p, float* k = nullptr) { float s = HYP_CAM / (HYP_CAM - p.z); if (k) *k = s; return { HYP_PC.x + p.x * s, HYP_PC.y - p.y * s }; }
+    static Vector3 hring(float R, float th, float d = 0) {
+        return { R * cosf(th) + HYP_D.x * d, R * sinf(th) * sinf(HYP_TILT) + HYP_D.y * d, R * sinf(th) * cosf(HYP_TILT) + HYP_D.z * d }; }
+    float hyperOpen() const { return hyperT < 0 ? 0 : hs(0.4f, 1.3f, hyperT) * (1 - hs(2.85f, 3.25f, hyperT)); }
+    float hyperStreak() const { return hyperT < 0 ? 0 : hs(1.0f, 2.2f, hyperT) * (1 - hs(3.2f, 3.8f, hyperT)); }
+
+    void startHyper() {
+        hyperT = 0; hyperSwitched = false; hyperStart = player;
+        eBullets.clear(); pBullets.clear(); warnings.clear();
+        hstars.clear();
+        for (int i = 0; i < 420; ++i) hstars.push_back({ frand(-900, 900), frand(-1100, 1100), frand(-250, 4000) });
+        PlaySound(sfx[SFX_SHIELD_UP]);
+    }
+    void updateHyper(float dt) {
+        float prev = hyperT; hyperT += dt;
+        float st = hyperStreak(), speed = 2600 * st * st + 1;
+        for (auto& q : hstars) { q.s -= speed * dt; if (q.s < -260) { q.s = frand(3000, 4000); q.lx = frand(-900, 900); q.ly = frand(-1100, 1100); } }
+        if (prev < 2.0f && hyperT >= 2.0f) PlaySound(sfx[SFX_DIVE]);
+        if (prev < 2.9f && hyperT >= 2.9f) { PlaySound(sfx[SFX_BIGBOOM]); shake = 0.3f; }
+        if (!hyperSwitched && hyperT >= HYPER_SWITCH) {          // out the other side: next stage, ship warps in
+            hyperSwitched = true;
+            player = { W / 2.0f, PLAYER_Y_LOW }; prevPX = player.x; roll = 0; warpT = WARP_TIME; invuln = 1.2f;
+            nextStage();
+        }
+        if (hyperT >= HYPER_END) hyperT = -1;
+    }
+    void drawHyper() {
+        float t = hyperT, open = hyperOpen(), st = hyperStreak(), dive = hs(2.0f, 2.8f, t), R = 120 * open;
+        // streaks: stars rushing toward the viewer along -D, trailing back toward the vanishing point
+        if (st > 0.01f) {
+            float len = 40 + 900 * st * st;
+            for (auto& q : hstars) {
+                Vector3 a{ q.lx + HYP_D.x * q.s, q.ly + HYP_D.y * q.s, HYP_D.z * q.s }, b{ q.lx + HYP_D.x * (q.s + len), q.ly + HYP_D.y * (q.s + len), HYP_D.z * (q.s + len) };
+                float k; Vector2 pa = hproj(a, &k), pb = hproj(b);
+                float al = Clamp(1 - q.s / 4000.f, 0, 1) * st;
+                DrawLineEx(pa, pb, Clamp(k, 0.8f, 3.f), Color{ 200, 220, 255, (unsigned char)(230 * al) });
+            }
+        }
+        const int NS = 160;
+        auto rim = [&](bool front) {
+            BeginBlendMode(BLEND_ADDITIVE);
+            for (int i = 0; i < NS; ++i) { float th = i * 2 * PI / NS; if ((sinf(th) > 0) != front) continue;
+                float k; Vector2 p = hproj(hring(R, th), &k); float nf = 0.7f + 0.3f * sinf(th);
+                drawGlow(p, (13 + 5 * sinf(th)) * k * open, Color{ 110, 170, 255, (unsigned char)(90 * open * nf) });
+                drawGlow(p, 4.5f * k * open, Color{ 220, 240, 255, (unsigned char)(190 * open * nf) }); }
+            for (int j = 0; j < 3; ++j) { float a0 = t * 3.2f + j * 2.094f;
+                for (float a = a0; a < a0 + 0.9f; a += 0.05f) { if ((sinf(a) > 0) != front) continue;
+                    float k; Vector2 p = hproj(hring(R * 1.07f, a), &k); drawGlow(p, 6 * k, Color{ 200, 230, 255, (unsigned char)(170 * open) }); } }
+            EndBlendMode(); };
+        if (open > 0.001f) {
+            BeginBlendMode(BLEND_ADDITIVE); drawGlow(HYP_PC, 240 * open, Color{ 60, 100, 255, (unsigned char)(70 * open) }); EndBlendMode();
+            rim(false);
+            Vector2 c = hproj({ 0, 0, 0 }), prevP = hproj(hring(R, 0));
+            for (int i = 1; i <= NS; ++i) { Vector2 q = hproj(hring(R, i * 2 * PI / NS));
+                DrawTriangle(c, q, prevP, Color{ 8, 12, 45, 255 }); DrawTriangle(c, prevP, q, Color{ 8, 12, 45, 255 }); prevP = q; }
+            BeginBlendMode(BLEND_ADDITIVE);
+            float L = 6 * R;
+            for (int ring = 0; ring < 9; ++ring) { float u = fmodf(ring / 9.f + t * 0.7f, 1.f), d = u * u * L;
+                Vector2 pv = hproj(hring(R, 0, d));
+                for (int i = 1; i <= 64; ++i) { Vector2 q = hproj(hring(R, i * 2 * PI / 64, d)); DrawLineEx(pv, q, 1.3f, Color{ 110, 160, 255, (unsigned char)(150 * (1 - u) * open) }); pv = q; } }
+            for (int i = 0; i < 64; ++i) { float th = i * 2.3999f, u = fmodf(i * 0.137f + t * 1.2f, 1.f), u2 = std::min(1.f, u + 0.15f);
+                DrawLineEx(hproj(hring(R, th, u * u * L)), hproj(hring(R, th, u2 * u2 * L)), 1.1f + 1.4f * (1 - u),
+                           Color{ 150, 200, 255, (unsigned char)(190 * (1 - u) * open) }); }
+            Vector2 vp = hproj({ HYP_D.x * 1e5f, HYP_D.y * 1e5f, HYP_D.z * 1e5f });
+            drawGlow(vp, 36 * open, Color{ 200, 225, 255, (unsigned char)(200 * open) }); drawGlow(vp, 12 * open, Color{ 255, 255, 255, (unsigned char)(255 * open) });
+            EndBlendMode();
+        }
+        if (t > 0.3f && t < 0.9f) {                                  // the tear before it opens
+            float u = hs(0.3f, 0.6f, t) * (1 - hs(0.7f, 0.9f, t));
+            BeginBlendMode(BLEND_ADDITIVE);
+            DrawRectangleV({ HYP_PC.x - 130 * u, HYP_PC.y - 1.5f }, { 260 * u, 3 }, Color{ 230, 240, 255, (unsigned char)(255 * u) });
+            drawGlow(HYP_PC, 60 * u, Color{ 140, 190, 255, (unsigned char)(200 * u) });
+            EndBlendMode();
+        }
+        if (!hyperSwitched) {                                        // the ship: line up, reach the mouth, dive down the tunnel
+            Vector2 pos = Vector2Lerp(hyperStart, { W / 2.0f, 640 }, hs(0, 0.7f, t));
+            float sc = 1, alpha = 1;
+            if (dive > 0) {
+                float ap = hs(0, 0.45f, dive);
+                if (ap < 1) pos = Vector2Lerp(pos, hproj({ 0, 0, 0 }), ap);
+                else { float d = hs(0.35f, 1.0f, dive); d = d * d * 700; float k; pos = hproj({ HYP_D.x * d, HYP_D.y * d, HYP_D.z * d }, &k); sc = k; }
+                alpha = 1 - hs(0.8f, 1.0f, dive);
+            }
+            if (alpha > 0.01f) {
+                float S = 50 * sc, charge = hs(1.0f, 2.0f, t);
+                BeginBlendMode(BLEND_ADDITIVE);
+                for (float sx : { -1.f, 1.f }) {
+                    Vector2 n{ pos.x + sx * 6 * sc, pos.y + 20 * sc };
+                    float L2 = (22 + 60 * charge + 50 * dive) * sc * (0.9f + 0.1f * sinf(time * 50 + sx));
+                    DrawTriangle({ n.x - 2.5f * sc, n.y }, { n.x, n.y + L2 }, { n.x + 2.5f * sc, n.y }, Color{ 60, 130, 255, (unsigned char)(170 * alpha) });
+                    DrawTriangle({ n.x - 1.4f * sc, n.y }, { n.x, n.y + L2 * 0.6f }, { n.x + 1.4f * sc, n.y }, Color{ 230, 245, 255, (unsigned char)(220 * alpha) });
+                    drawGlow({ n.x, n.y + 3 }, (10 + 8 * charge) * sc, Color{ 90, 160, 255, (unsigned char)(190 * alpha) });
+                }
+                EndBlendMode();
+                drawShip(gfx.player, pos, S, 0, dive <= 0, Color{ 255, 255, 255, (unsigned char)(255 * alpha) });
+            }
+        }
+        if (open > 0.001f) rim(true);
+        float cl = (t - 2.85f) / 0.6f;                               // collapse: flash + shockwave
+        if (cl > 0 && cl < 1) {
+            BeginBlendMode(BLEND_ADDITIVE);
+            drawGlow(HYP_PC, 60 + 260 * cl, Color{ 200, 230, 255, (unsigned char)(200 * (1 - cl)) });
+            for (int i = 0; i < 96; ++i) drawGlow(hproj(hring(40 + 320 * cl, i * 2 * PI / 96)), 5, Color{ 170, 210, 255, (unsigned char)(150 * (1 - cl)) });
+            EndBlendMode();
+        }
+        float wf = hs(2.9f, 3.05f, t) * (1 - hs(3.05f, 3.6f, t));
+        if (wf > 0) DrawRectangle(0, 0, W, H, Color{ 230, 240, 255, (unsigned char)(140 * wf) });
+    }
+
     void startDive(Enemy& e) {
         float dir = e.pos.x < W / 2 ? -1.f : 1.f;
         float tx = Clamp(player.x + frand(-60, 60), 40, W - 40);
@@ -1544,6 +1667,7 @@ struct Game {
         stageTimer += dt; cycleT += dt;
         bannerTimer -= dt;
         shake = std::max(0.0f, shake - dt);
+        if (hyperT >= 0) { updateHyper(dt); if (!hyperSwitched) return; }
 
         updatePlayer(dt);
         updateEnemies(dt);
@@ -1558,7 +1682,10 @@ struct Game {
         // (a short pause after the last kill so explosions can play out; torpedo trails don't block it)
         if (mode == PLAYING && !anyAlive && !boss.active && !meteorField && meteors.empty() && packages.empty()) {
             clearT += dt;
-            if (clearT > 1.6f) { clearT = 0; nextStage(); }
+            if (clearT > 1.6f) {
+                clearT = 0;
+                if (stageKind(stage) == SK_BOSS && playerAlive && hyperT < 0) startHyper(); else nextStage();
+            }
         } else clearT = 0;
     }
 
@@ -2532,14 +2659,17 @@ struct Game {
         }
 
         BeginBlendMode(BLEND_ADDITIVE);
+        float starFade = 1 - hyperStreak();
         for (auto& s : stars) {
             float tw = 0.5f + 0.5f * sinf(time * 3 + s.phase);
-            Color c = s.col; c.a = (unsigned char)std::min(255.0f, 60 + 195 * tw * (s.speed / 150.0f));
+            Color c = s.col; c.a = (unsigned char)(std::min(255.0f, 60 + 195 * tw * (s.speed / 150.0f)) * starFade);
             float sz = s.speed > 100 ? 1.4f : 0.9f;
             DrawRectangleV({ s.pos.x - sz / 2, s.pos.y - sz / 2 }, { sz, sz * (mode == PLAYING ? 2.2f : 1.0f) }, c);
             if (s.speed > 130) drawGlow(s.pos, 3.5f, Color{ c.r, c.g, c.b, (unsigned char)(c.a / 3) });
         }
         EndBlendMode();
+
+        if (hyperT >= 0) drawHyper();
 
         // smoke under ships
         for (auto& p : parts) if (p.kind == SMOKE) {
@@ -2607,7 +2737,7 @@ struct Game {
             }
         }
 
-        if ((mode == PLAYING || mode == VICTORY) && playerAlive) {
+        if ((mode == PLAYING || mode == VICTORY) && playerAlive && !(hyperT >= 0 && !hyperSwitched)) {
             bool blink = invuln > 0 && fmodf(time, 0.2f) < 0.1f;
             if (!blink) drawPlayerShip();
             if (shield) drawShield();
