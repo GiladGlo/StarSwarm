@@ -35,6 +35,8 @@ The title rotates between **STAR SWARM**, **Developed by Gilad Globen** and **De
 | Esc | Pause menu: **Resume game**, **End current game** (back to the title screen) or **Exit to desktop**. Pick with ↑/↓ + Enter, keys 1–3 or the mouse; Esc again resumes. On the title screen Esc quits |
 | F11 / Alt+Enter | Toggle fullscreen |
 
+**Your fighter:** a detailed ship (panelled wings with flaps, missile pods, ribbed cannons, engine intakes and petalled nozzles, framed canopy with a pilot) with live effects: it banks into turns, its twin engines burn with shock-diamond plumes and stream exhaust, side thrusters puff on sharp direction changes, red/green wingtip and white tail lights strobe, a glint sweeps across the canopy, the cannons flash when firing, and it warps in on every (re)spawn.
+
 **Shield:** a force field absorbs one hit (enemy fire or a ramming diver) and shatters. It regenerates when you respawn and at the start of each stage.
 
 ## Couriers & the arsenal

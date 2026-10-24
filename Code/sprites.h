@@ -25,6 +25,18 @@ inline float   sstep(float a, float b, float x) { float t = sat((x - a) / (b - a
 inline float   hash2(float x, float y) { float h = sinf(x * 127.1f + y * 311.7f) * 43758.5453f; return h - floorf(h); }
 inline Vector2 M(Vector2 p) { return { fabsf(p.x), p.y }; }           // mirror across centre line
 inline Vector2 rot(Vector2 p, float deg) { float a = deg * DEG2RAD, c = cosf(a), s = sinf(a); return { c * p.x + s * p.y, -s * p.x + c * p.y }; }
+inline float vnoise(Vector2 p) {
+    float ix = floorf(p.x), iy = floorf(p.y), fx = p.x - ix, fy = p.y - iy;
+    fx = fx * fx * (3 - 2 * fx); fy = fy * fy * (3 - 2 * fy);
+    float a = hash2(ix, iy), b = hash2(ix + 1, iy), c = hash2(ix, iy + 1), d = hash2(ix + 1, iy + 1);
+    return a + (b - a) * fx + (c - a) * fy + (a - b - c + d) * fx * fy;
+}
+inline float fbm(Vector2 p, int oct) {
+    float s = 0, a = 0.5f;
+    for (int i = 0; i < oct; ++i) { s += a * vnoise(p); p = { p.x * 2.03f + 1.7f, p.y * 2.03f + 9.2f }; a *= 0.5f; }
+    return s;
+}
+
 
 // ------------------------------------------------------------ SDF primitives --
 inline float sdCircle(Vector2 p, Vector2 c, float r) { return Vector2Distance(p, c) - r; }
@@ -67,6 +79,7 @@ struct Part {
 
 struct Surf { Vector3 col{ 0, 0, 0 }; float h = 0, a = 0, emis = 0, gloss = 0, metal = 0; };
 
+inline float g_roll = 0;   // radians: renders the sprite banked about its long (y) axis
 inline Texture2D render(int N, const std::vector<Part>& parts, Vector3 rim = { 0.45f, 0.65f, 1.f },
                         std::vector<unsigned char>* maskOut = nullptr, bool hd = false) {
     const float px = 2.0f / N;
@@ -76,6 +89,10 @@ inline Texture2D render(int N, const std::vector<Part>& parts, Vector3 rim = { 0
     for (int y = 0; y < N; ++y)
         for (int x = 0; x < N; ++x) {
             Vector2 p{ -1 + (x + 0.5f) * px, -1 + (y + 0.5f) * px };
+            if (g_roll != 0) {   // bank: the dipping wing foreshortens more than the rising one
+                bool dip = (p.x > 0) == (g_roll > 0);
+                p.x /= cosf(fabsf(g_roll) * (dip ? 1.5f : 0.5f));
+            }
             Surf& s = buf[y * N + x];
             for (const Part& pt : parts) {
                 float d = pt.sdf(p);
@@ -108,6 +125,10 @@ inline Texture2D render(int N, const std::vector<Part>& parts, Vector3 rim = { 0
             if (s.a <= 0) continue;
             float dx = (H(x + 1, y) - H(x - 1, y)) / (2 * px), dy = (H(x, y + 1) - H(x, y - 1)) / (2 * px);
             Vector3 n = Vector3Normalize({ -dx * 0.55f, -dy * 0.55f, 1 });
+            if (g_roll != 0) {   // bank: tilt normals by the roll plus a little wing dihedral on each side
+                float side = x < N / 2 ? -1.f : 1.f;
+                float ang = g_roll * (1 + 0.6f * side * (g_roll > 0 ? 1 : -1));
+                float cr = cosf(ang), sr = sinf(ang); n = { n.x * cr + n.z * sr, n.y, -n.x * sr + n.z * cr }; }
             float diff = std::max(0.f, Vector3DotProduct(n, L));
             float spec = powf(std::max(0.f, Vector3DotProduct(n, Hv)), 10 + s.gloss * 110) * (0.1f + s.gloss * 1.3f);
             float fres = powf(1 - n.z, 2.2f);
@@ -198,49 +219,122 @@ inline Texture2D render(int N, const std::vector<Part>& parts, Vector3 rim = { 0
 // Coordinates: unit square [-1,1]^2, +y is DOWN on screen.
 // Player faces UP (nose at -y). Enemies face DOWN (head at +y).
 
-inline Texture2D playerShip(int N) {
-    Vector3 hull = rgb(222, 226, 236), red = rgb(205, 30, 42), blue = rgb(35, 85, 215), gun = rgb(70, 76, 92);
+inline Texture2D playerShip(int N, float rollDeg = 0) {   // detailed fighter; rollDeg renders it banked
+    g_roll = rollDeg * DEG2RAD;
+    Vector3 hull = rgb(226, 229, 238), hull2 = rgb(188, 192, 204), red = rgb(205, 30, 42), blue = rgb(35, 85, 215),
+            gun = rgb(66, 72, 88), dark = rgb(34, 36, 44);
     std::vector<Part> P;
-    // swept wings
+    auto seam = [](Vector3& c, float& h, float k = 0.55f) { h -= 0.02f; c = Vector3Scale(c, k); };
+    // swept wings: panels, flaps, leading-edge strip, stripes, chevrons, vents
     P.push_back({ [](Vector2 p) { Vector2 q = M(p); return sdPoly(q, { { 0.08f, -0.15f }, { 0.86f, 0.36f }, { 0.9f, 0.58f },
                                                                        { 0.74f, 0.62f }, { 0.08f, 0.48f } }) - 0.02f; },
                   hull, 0.10f, 0.12f, 0.10f, 0.55f, 0.6f, 0, 1,
-                  [=](Vector2 p, float, Vector3& c, float& h, float&) {
-                      float ax = fabsf(p.x);
+                  [=](Vector2 p, float d, Vector3& c, float& h, float& e) {
+                      Vector2 q = M(p); float ax = q.x;
+                      float lead = (q.y + 0.15f) - (ax - 0.08f) * (0.51f / 0.78f);   // distance-ish behind the leading edge
                       if (ax > 0.6f) c = red;
                       if (fabsf(ax - 0.44f) < 0.035f) c = blue;
-                      if (fabsf(ax - 0.28f) < 0.007f || fabsf(p.y - 0.30f + ax * 0.3f) < 0.006f) { h -= 0.03f; c = Vector3Scale(c, 0.55f); }
+                      if (fabsf(ax - 0.44f) < 0.035f && fabsf(ax - 0.44f) > 0.026f) c = Vector3Scale(blue, 0.6f);
+                      if (lead < 0.06f && ax < 0.6f) c = Vector3Scale(hull2, 0.95f);                // leading-edge strip
+                      if (fabsf(lead - 0.06f) < 0.005f && ax < 0.6f) seam(c, h);
+                      // panel lines
+                      if (fabsf(ax - 0.28f) < 0.006f || fabsf(p.y - 0.30f + ax * 0.3f) < 0.005f) seam(c, h);
+                      if (fabsf(ax - 0.62f) < 0.005f) seam(c, h, 0.6f);
+                      // trailing-edge flaps
+                      if (q.y > 0.4f + (ax - 0.08f) * 0.12f && ax > 0.3f && ax < 0.72f) {
+                          c = Vector3Scale(c, 0.9f);
+                          if (fabsf(ax - 0.51f) < 0.005f) seam(c, h);
+                      }
+                      if (fabsf(q.y - (0.4f + (ax - 0.08f) * 0.12f)) < 0.005f && ax > 0.3f && ax < 0.72f) seam(c, h);
+                      // hazard chevrons near the root
+                      if (ax > 0.12f && ax < 0.24f && q.y > 0.05f && q.y < 0.2f) {
+                          float v = (q.y + ax * 0.6f) * 22; if (v - floorf(v) < 0.5f) c = mix(c, rgb(240, 190, 40), 0.85f); }
+                      // intake vents
+                      if (ax > 0.31f && ax < 0.4f && q.y > 0.12f && q.y < 0.3f) {
+                          float v = q.y * 60; c = Vector3Scale(c, 0.6f); if (v - floorf(v) < 0.45f) { c = dark; h -= 0.012f; } }
+                      // dust / wear
+                      c = Vector3Scale(c, 0.93f + 0.1f * fbm({ p.x * 14, p.y * 14 }, 3));
+                      if (d > -0.015f) c = Vector3Scale(c, 0.82f);
+                      (void)e;
                   } });
-    // wing-tip missile pods
+    // wing-tip missile pods with three missiles each
     P.push_back({ [](Vector2 p) { return sdCapsule(M(p), { 0.82f, 0.05f }, { 0.82f, 0.62f }, 0.035f, 0.06f); },
-                  red, 0.22f, 0.14f, 0.06f, 0.7f, 0.8f });
-    // cannons
+                  red, 0.22f, 0.14f, 0.06f, 0.7f, 0.8f, 0, 1,
+                  [=](Vector2 p, float, Vector3& c, float& h, float& e) {
+                      Vector2 q = M(p);
+                      if (q.y < 0.14f) { c = rgb(235, 235, 240); if (q.y < 0.09f) c = rgb(60, 60, 70); }     // seeker heads
+                      if (fabsf(q.y - 0.3f) < 0.006f || fabsf(q.y - 0.46f) < 0.006f) seam(c, h, 0.5f);
+                      if (q.y > 0.56f) { c = dark; }
+                      (void)e;
+                  } });
+    // cannons with cooling rings and muzzle
     P.push_back({ [](Vector2 p) { return sdCapsule(M(p), { 0.5f, -0.38f }, { 0.5f, 0.2f }, 0.022f, 0.04f); },
-                  gun, 0.2f, 0.08f, 0.04f, 0.9f, 0.8f });
-    // twin engine nacelles
+                  gun, 0.2f, 0.08f, 0.04f, 0.9f, 0.8f, 0, 1,
+                  [=](Vector2 p, float, Vector3& c, float& h, float&) {
+                      float r = p.y * 40; if (p.y < -0.05f && r - floorf(r) < 0.25f) seam(c, h, 0.5f);
+                      if (p.y < -0.36f) c = rgb(20, 20, 26);
+                  } });
+    // twin engine nacelles: intakes, ribbing, heat-tinted rear
     P.push_back({ [](Vector2 p) { return sdCapsule(M(p), { 0.24f, 0.05f }, { 0.24f, 0.74f }, 0.09f, 0.13f); },
-                  gun, 0.22f, 0.2f, 0.12f, 0.85f, 0.7f,
-                  0, 1, [](Vector2 p, float, Vector3& c, float& h, float&) {
-                      float f = p.y * 16 - floorf(p.y * 16);
-                      if (f < 0.15f && p.y > 0.3f) { c = Vector3Scale(c, 0.55f); h -= 0.02f; } } });
-    // engine nozzles (emissive)
+                  gun, 0.22f, 0.2f, 0.12f, 0.85f, 0.7f, 0, 1,
+                  [=](Vector2 p, float d, Vector3& c, float& h, float& e) {
+                      Vector2 q = M(p);
+                      if (q.y < 0.12f) { c = dark; h -= 0.02f; if (fabsf(q.x - 0.24f) < 0.008f) c = gun; }  // intake mouth
+                      float f = q.y * 16 - floorf(q.y * 16);
+                      if (f < 0.15f && q.y > 0.3f) seam(c, h);
+                      c = mix(c, rgb(95, 80, 140), 0.5f * sstep(0.5f, 0.74f, q.y));                       // heat tint
+                      if (fabsf(q.x - 0.24f) < 0.01f && q.y > 0.15f && q.y < 0.5f) c = Vector3Scale(c, 1.25f);  // spine highlight
+                      if (d > -0.012f) c = Vector3Scale(c, 1.15f);
+                      (void)e;
+                  } });
+    // engine nozzles: petals + hot core
     P.push_back({ [](Vector2 p) { return sdEllipse(M(p), { 0.24f, 0.78f }, { 0.10f, 0.06f }); },
-                  rgb(120, 200, 255), 0.25f, 0.05f, 0.04f, 0.0f, 0.3f, 1.4f });
-    // fuselage
+                  rgb(120, 200, 255), 0.25f, 0.05f, 0.04f, 0.0f, 0.3f, 1.4f, 1,
+                  [=](Vector2 p, float d, Vector3& c, float& h, float& e) {
+                      Vector2 q = M(p); float r = sat(-d / 0.05f);
+                      c = mix(rgb(60, 110, 200), rgb(235, 248, 255), r * r); e = 0.6f + 1.4f * r;
+                      float a = atan2f(q.y - 0.78f, q.x - 0.24f);
+                      if (r < 0.35f && fabsf(sinf(a * 8)) < 0.3f) { c = rgb(70, 74, 90); e = 0; h += 0.01f; }   // nozzle petals
+                  } });
+    // fuselage: nose cone, spine, panel lines, intake grille, sensor bumps, stripes
     P.push_back({ [](Vector2 p) { return sdCapsule(p, { 0, -0.86f }, { 0, 0.66f }, 0.05f, 0.17f); },
                   hull, 0.28f, 0.32f, 0.16f, 0.5f, 0.85f, 0, 1,
-                  [=](Vector2 p, float, Vector3& c, float& h, float&) {
-                      if (fabsf(p.x) < 0.03f && p.y > 0.0f && p.y < 0.6f) c = red;
+                  [=](Vector2 p, float d, Vector3& c, float& h, float& e) {
+                      float ax = fabsf(p.x);
+                      if (ax < 0.03f && p.y > 0.0f && p.y < 0.6f) c = red;
+                      if (ax < 0.03f && ax > 0.022f && p.y > 0.0f && p.y < 0.6f) c = Vector3Scale(red, 0.6f);
                       if (p.y < -0.72f) c = red;
-                      for (float ly : { 0.08f, 0.38f })
-                          if (fabsf(p.y - ly) < 0.007f) { h -= 0.03f; c = Vector3Scale(c, 0.5f); }
+                      if (fabsf(p.y + 0.72f) < 0.006f) seam(c, h, 0.4f);
+                      if (p.y < -0.78f && ax < 0.012f) c = rgb(240, 240, 245);                         // pitot tip
+                      for (float ly : { 0.08f, 0.38f, -0.52f }) if (fabsf(p.y - ly) < 0.006f) seam(c, h, 0.5f);
+                      if (fabsf(ax - 0.09f) < 0.005f && p.y > -0.5f && p.y < 0.55f) seam(c, h, 0.65f);  // longitudinal panel seams
+                      // dorsal intake grille behind the canopy
+                      if (p.y > -0.02f && p.y < 0.06f && ax < 0.07f && ax > 0.035f) {
+                          float v = p.y * 120; c = dark; if (v - floorf(v) < 0.4f) c = gun; h -= 0.01f; }
+                      // sensor bumps
+                      for (float sy : { 0.2f, 0.27f }) { float dd = sqrtf((ax - 0.06f) * (ax - 0.06f) + (p.y - sy) * (p.y - sy));
+                          if (dd < 0.018f) { h += 0.015f * (1 - dd / 0.018f); c = Vector3Scale(hull2, 0.9f); } }
+                      // squadron chevron on the nose
+                      if (p.y > -0.68f && p.y < -0.6f) { float v = (p.y + ax * 0.8f) * 30; if (v - floorf(v) < 0.45f) c = blue; }
+                      c = Vector3Scale(c, 0.94f + 0.09f * fbm({ p.x * 16, p.y * 16 }, 3));
+                      if (p.y > 0.45f) c = Vector3Scale(c, 1 - 0.3f * sstep(0.45f, 0.66f, p.y));       // exhaust soot
+                      (void)d; (void)e;
                   } });
-    // canopy glass
+    // canopy: framed glass with reflection and a pilot silhouette
     P.push_back({ [](Vector2 p) { return sdEllipse(p, { 0, -0.28f }, { 0.075f, 0.22f }); },
                   rgb(25, 70, 150), 0.55f, 0.18f, 0.08f, 0.2f, 1.0f, 0.15f, 1,
-                  [](Vector2 p, float, Vector3& c, float&, float&) {
-                      if (p.y < -0.38f && p.x < -0.01f) c = mix(c, rgb(170, 220, 255), 0.6f); } });
-    return render(N, P);
+                  [=](Vector2 p, float d, Vector3& c, float& h, float& e) {
+                      if (d > -0.012f) { c = rgb(60, 64, 76); e = 0; return; }                         // frame
+                      if (fabsf(p.y + 0.3f) < 0.006f) { c = rgb(60, 64, 76); e = 0; return; }          // canopy bow
+                      float hy = sqrtf(p.x * p.x * 1.8f + (p.y + 0.22f) * (p.y + 0.22f));
+                      if (hy < 0.035f) { c = mix(rgb(20, 22, 30), rgb(230, 230, 235), sstep(0.03f, 0.0f, hy) * 0.3f); e = 0; } // helmet
+                      c = mix(c, rgb(170, 220, 255), 0.6f * sstep(-0.32f, -0.44f, p.y) * (p.x < 0.01f));     // sky reflection
+                      if (p.x > 0.03f) c = Vector3Scale(c, 0.8f);
+                      (void)h;
+                  } });
+    Texture2D t = render(N, P, { 0.45f, 0.65f, 1.f }, nullptr, true);
+    g_roll = 0;
+    return t;
 }
 
 inline Texture2D bee(int N, int frame) {
@@ -497,18 +591,6 @@ inline float bossWingSdf(int id, Vector2 p) {
 }
 
 // ---- HD detail helpers -------------------------------------------------------
-inline float vnoise(Vector2 p) {
-    float ix = floorf(p.x), iy = floorf(p.y), fx = p.x - ix, fy = p.y - iy;
-    fx = fx * fx * (3 - 2 * fx); fy = fy * fy * (3 - 2 * fy);
-    float a = hash2(ix, iy), b = hash2(ix + 1, iy), c = hash2(ix, iy + 1), d = hash2(ix + 1, iy + 1);
-    return a + (b - a) * fx + (c - a) * fy + (a - b - c + d) * fx * fy;
-}
-inline float fbm(Vector2 p, int oct) {
-    float s = 0, a = 0.5f;
-    for (int i = 0; i < oct; ++i) { s += a * vnoise(p); p = { p.x * 2.03f + 1.7f, p.y * 2.03f + 9.2f }; a *= 0.5f; }
-    return s;
-}
-
 // Plated, greebled, weathered hull surface. sc: detail scale; wing: lighter detailing; seed: per-ship variation.
 inline void hullDetail(Vector2 p, float d, Vector3& c, float& h, float& e, const struct BossDesign& B, float sc, float seed, bool wing);
 inline void chitinDetail(Vector2 p, float d, Vector3& c, float& h, float& e, const struct BossDesign& B, float sc);

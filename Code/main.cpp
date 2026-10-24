@@ -49,6 +49,7 @@ static std::vector<Vector2> buildPath(const std::vector<Vector2>& ctrl) {
 //  Rendered ship textures (generated at startup by sprites.h)
 // ----------------------------------------------------------------------------
 struct Gfx {
+    Texture2D playerRoll[5]{};                         // banked frames: -30 -15 0 +15 +30 degrees
     Texture2D player{}, bee[2]{}, fly[2]{}, boss[2]{}, bossDmg[2]{}, glow{}, nebula{};
     static constexpr int BOSS_N = 512;
     Texture2D meteor[7]{};                             // 3D tumble atlases (m3d); [6] = volatile rock
@@ -66,7 +67,8 @@ struct Gfx {
     }
     void load() {
         const int N = 256;
-        player = spr::playerShip(N);
+        player = spr::playerShip(320);
+        for (int i = 0; i < 5; ++i) playerRoll[i] = i == 2 ? player : spr::playerShip(320, -30.0f + 15 * i);
         for (int f = 0; f < 2; ++f) {
             bee[f] = spr::bee(N, f);
             fly[f] = spr::butterfly(N, f);
@@ -85,6 +87,7 @@ struct Gfx {
         nebula = spr::nebula(300, 400);
     }
     void unload() {
+        for (int i : { 0, 1, 3, 4 }) UnloadTexture(playerRoll[i]);
         for (Texture2D* t : { &player, &bee[0], &bee[1], &fly[0], &fly[1], &boss[0], &boss[1], &bossDmg[0], &bossDmg[1], &glow, &nebula })
             UnloadTexture(*t);
         for (int i = 0; i < 10; ++i) if (bossLoaded[i]) UnloadTexture(bossTex[i]);
@@ -406,6 +409,7 @@ struct Game {
     Vector2 player{ W / 2.0f, H - 70.0f };
     bool  playerAlive = true;
     float respawnTimer = 0, invuln = 0, fireCooldown = 0;
+    float roll = 0, prevPX = W / 2.0f, prevVX = 0, muzzleT = 0, warpT = 0, exhaustT = 0;   // player ship FX
     bool  shield = false;                      // one-hit force field
     float shieldGrow = 1, shieldGrace = 0, shieldHitFlash = 0;
     int   lives = 3, score = 0, hiScore = 0, stage = 0, nextLifeAt = 20000;
@@ -443,7 +447,7 @@ struct Game {
 
     void newGame(int startStage = 1) {
         lives = 3; score = 0; stage = std::clamp(startStage, 1, FINAL_STAGE) - 1; nextLifeAt = 20000; shotsFired = hits = 0;
-        playerAlive = true; player = { W / 2.0f, H - 70.0f }; invuln = 0;
+        playerAlive = true; player = { W / 2.0f, H - 70.0f }; invuln = 0; roll = 0; prevPX = player.x; warpT = WARP_TIME;
         pBullets.clear(); eBullets.clear(); parts.clear(); rings.clear(); popups.clear(); meteors.clear(); meteorField = false;
         packages.clear(); zaps.clear(); weapon = W_PHOTON; wlevel = 0; heat = 0; overheated = false; weaponBag.clear();
         mode = PLAYING; shield = false; boss.active = false;
@@ -1182,6 +1186,64 @@ struct Game {
         EndBlendMode();
     }
 
+    // The player's ship with its live effects: warp-in, engine plumes with shock diamonds, banked sprite,
+    // navigation strobes, canopy glint and gun-muzzle flashes.
+    void drawPlayerShip() {
+        const float S = 50;
+        float w = warpT > 0 ? 1 - warpT / WARP_TIME : 1;         // warp-in progress 0..1
+        Vector2 pos = player;
+        if (warpT > 0) {
+            BeginBlendMode(BLEND_ADDITIVE);
+            for (int k = 0; k < 14; ++k) {
+                float a = k * 0.4488f, r0 = (1 - w) * 110 + 8, len = 22 * (1 - w) + 4;
+                Vector2 d{ cosf(a), sinf(a) };
+                DrawLineEx({ pos.x + d.x * r0, pos.y + d.y * r0 * 0.6f }, { pos.x + d.x * (r0 + len), pos.y + d.y * (r0 + len) * 0.6f },
+                           1.6f, Color{ 140, 200, 255, (unsigned char)(220 * w) });
+            }
+            drawGlow(pos, 14 + 40 * w, Color{ 140, 200, 255, (unsigned char)(160 * w) });
+            if (w > 0.55f) drawGlow(pos, S * 0.9f * (1 - (w - 0.55f) / 0.45f), Color{ 255, 255, 255, 200 });
+            EndBlendMode();
+        }
+        float fade = warpT > 0 ? std::max(0.0f, (w - 0.6f) / 0.4f) : 1;
+        if (fade <= 0) return;
+        unsigned char fa = (unsigned char)(255 * fade);
+        float cr = cosf(roll * DEG2RAD);
+        BeginBlendMode(BLEND_ADDITIVE);
+        for (float sx : { -1.f, 1.f }) {                          // engine plumes
+            Vector2 n{ pos.x + sx * 6 * cr, pos.y + 20 };
+            float fl = 0.85f + 0.1f * sinf(time * 50 + sx * 3) + 0.05f * sinf(time * 83);
+            float L = S * 0.42f * fl;
+            DrawTriangle({ n.x - 2.5f, n.y }, { n.x, n.y + L }, { n.x + 2.5f, n.y }, Color{ 60, 130, 255, (unsigned char)(130 * fade) });
+            DrawTriangle({ n.x - 1.4f, n.y }, { n.x, n.y + L * 0.6f }, { n.x + 1.4f, n.y }, Color{ 220, 240, 255, (unsigned char)(210 * fade) });
+            for (int k = 1; k <= 3; ++k)                           // shock diamonds
+                drawGlow({ n.x, n.y + L * 0.17f * k }, S * (0.05f - k * 0.008f) * (1 + 0.15f * sinf(time * 40 + k)), Color{ 200, 230, 255, (unsigned char)(200 * fade) });
+            drawGlow({ n.x, n.y + 2 }, S * 0.13f * fl, Color{ 90, 160, 255, (unsigned char)(170 * fade) });
+        }
+        EndBlendMode();
+        // banked sprite: cross-fade the two nearest roll frames
+        float fi = (roll + 30) / 15.0f; int i0 = std::clamp((int)fi, 0, 3); float a = Clamp(fi - i0, 0, 1);
+        drawShip(gfx.playerRoll[i0], pos, S, 0, true, Color{ 255, 255, 255, fa });
+        if (a > 0.02f) drawShip(gfx.playerRoll[i0 + 1], pos, S, 0, false, Color{ 255, 255, 255, (unsigned char)(fa * a) });
+        BeginBlendMode(BLEND_ADDITIVE);
+        auto bump = [](float x, float wd) { return expf(-(x / wd) * (x / wd)); };
+        float bt = fmodf(time, 1.2f), on = bump(bt - 0.05f, 0.04f) + bump(bt - 0.22f, 0.04f);
+        if (on > 0.02f) {                                         // nav strobes: red port, green starboard
+            drawGlow({ pos.x - 20.5f * cr, pos.y + 1.5f }, S * 0.07f * on, Color{ 255, 60, 60, (unsigned char)(230 * fade) });
+            drawGlow({ pos.x + 20.5f * cr, pos.y + 1.5f }, S * 0.07f * on, Color{ 80, 255, 120, (unsigned char)(230 * fade) });
+        }
+        float won = bump(fmodf(time + 0.6f, 1.8f), 0.03f);       // white tail strobe
+        if (won > 0.02f) drawGlow({ pos.x, pos.y + 15.5f }, S * 0.09f * won, Color{ 255, 255, 255, (unsigned char)(230 * fade) });
+        float gt = fmodf(time, 3.0f);                             // canopy glint
+        if (gt < 0.5f) { float u = gt / 0.5f;
+            drawGlow({ pos.x - 0.5f, pos.y + (-0.46f + 0.36f * u) * S / 2 }, S * 0.05f, Color{ 255, 255, 255, (unsigned char)(200 * sinf(u * PI) * fade) }); }
+        if (muzzleT > 0) {                                        // gun-muzzle flashes
+            float k = muzzleT / 0.07f;
+            for (float sx : { -1.f, 1.f }) { Vector2 m{ pos.x + sx * 12.5f * cr, pos.y - 10 };
+                drawGlow(m, S * 0.09f * k, Color{ 255, 170, 90, 220 }); drawGlow(m, S * 0.035f * k, Color{ 255, 240, 220, 255 }); }
+        }
+        EndBlendMode();
+    }
+
     void startDive(Enemy& e) {
         float dir = e.pos.x < W / 2 ? -1.f : 1.f;
         float tx = Clamp(player.x + frand(-60, 60), 40, W - 40);
@@ -1497,12 +1559,13 @@ struct Game {
             bool divers = std::any_of(enemies.begin(), enemies.end(), [](const Enemy& e) { return e.state == DIVING; });
             if (respawnTimer <= 0 && lives <= 0) { mode = GAMEOVER; stageTimer = 0; saveHiScore(); }
             else if (respawnTimer <= 0 && !divers) {
-                playerAlive = true; invuln = 2.0f; player.x = W / 2.0f;
+                playerAlive = true; invuln = 2.0f; player.x = W / 2.0f; prevPX = player.x; roll = 0; warpT = WARP_TIME;
                 raiseShield();
             }
             return;
         }
         invuln = std::max(0.0f, invuln - dt);
+        updateShipFx(dt);
         shieldGrace = std::max(0.0f, shieldGrace - dt);
         shieldHitFlash = std::max(0.0f, shieldHitFlash - dt);
         shieldGrow = std::min(1.0f, shieldGrow + dt * 2.2f);
@@ -1533,7 +1596,7 @@ struct Game {
                 if (overheated && GetRandomValue(0, 3) == 0) { float life = frand(0.4f, 0.7f);
                     parts.push_back({ { player.x, player.y - 26 }, { frand(-10, 10), frand(-40, -20) }, life, life, 6, Color{ 120, 120, 130, 255 }, SMOKE }); }
             }
-        } else if (trigger && fireCooldown <= 0) firePlayerWeapon();
+        } else if (trigger && fireCooldown <= 0) { size_t nb = pBullets.size(); firePlayerWeapon(); if (pBullets.size() > nb && weapon != W_PULSE) muzzleT = 0.07f; }
     }
 
     void followPath(Enemy& e, float dist) {
@@ -1765,6 +1828,32 @@ struct Game {
     int countPB(int kind) const { int n = 0; for (auto& b : pBullets) if (b.kind == kind) ++n; return n; }
 
     // Fire one volley of the current (non-laser) weapon; each class has its own on-screen limit
+    static constexpr float WARP_TIME = 0.8f;
+    // Banking, side-thruster puffs, exhaust particles and timers for the player's ship.
+    // Velocity comes from the position change, so it works however the ship was moved.
+    void updateShipFx(float dt) {
+        warpT = std::max(0.0f, warpT - dt);
+        muzzleT = std::max(0.0f, muzzleT - dt);
+        float vx = dt > 0 ? (player.x - prevPX) / dt : 0;
+        prevPX = player.x;
+        float target = Clamp(vx / 340.0f, -1, 1) * 30;
+        roll += (target - roll) * std::min(1.0f, dt * 9);
+        float dv = vx - prevVX; prevVX = vx;
+        if (fabsf(dv) > 150 && warpT <= 0) {           // sudden change of direction: side thrusters fire against it
+            float side = dv > 0 ? -1.f : 1.f;          // puff leaves on the side opposite to the new push
+            Vector2 o{ player.x + side * 17, player.y + 2 };
+            for (int k = 0; k < 6; ++k) { float life = frand(0.25f, 0.4f);
+                parts.push_back({ o, { side * frand(90, 200), frand(-40, 40) }, life, life, frand(2.5f, 4.5f), Color{ 230, 240, 255, 255 }, TRAIL }); }
+        }
+        if ((exhaustT -= dt) <= 0 && warpT <= 0) {     // exhaust particles stream behind the engines
+            exhaustT = 1 / 45.0f;
+            float cr = cosf(roll * DEG2RAD);
+            for (float sx : { -1.f, 1.f }) { float life = frand(0.25f, 0.4f);
+                parts.push_back({ { player.x + sx * 6 * cr + frand(-1, 1), player.y + 22 }, { frand(-10, 10) - vx * 0.25f, frand(150, 240) },
+                                  life, life, frand(1.6f, 2.8f), Color{ 120, 190, 255, 255 }, TRAIL }); }
+        }
+    }
+
     void firePlayerWeapon() {
         Vector2 m{ player.x, player.y - 26 };
         switch (weapon) {
@@ -2476,18 +2565,7 @@ struct Game {
 
         if ((mode == PLAYING || mode == VICTORY) && playerAlive) {
             bool blink = invuln > 0 && fmodf(time, 0.2f) < 0.1f;
-            if (!blink) {
-                float fl = 0.8f + 0.2f * sinf(time * 50);
-                BeginBlendMode(BLEND_ADDITIVE);
-                for (float sx : { -11.5f, 11.5f }) {
-                    Vector2 n{ player.x + sx, player.y + 22 };
-                    DrawTriangle({ n.x - 3.5f, n.y }, { n.x, n.y + 16 * fl }, { n.x + 3.5f, n.y }, Color{ 80, 150, 255, 200 });
-                    DrawTriangle({ n.x - 2, n.y }, { n.x, n.y + 9 * fl }, { n.x + 2, n.y }, Color{ 220, 240, 255, 255 });
-                    drawGlow({ n.x, n.y + 4 }, 12 * fl, Color{ 90, 160, 255, 180 });
-                }
-                EndBlendMode();
-                drawShip(gfx.player, player, 50, 0);
-            }
+            if (!blink) drawPlayerShip();
             if (shield) drawShield();
         }
 
