@@ -79,7 +79,8 @@ struct Part {
 
 struct Surf { Vector3 col{ 0, 0, 0 }; float h = 0, a = 0, emis = 0, gloss = 0, metal = 0; };
 
-inline float g_roll = 0;   // radians: renders the sprite banked about its long (y) axis
+inline float g_roll = 0;
+inline thread_local Image* g_imgOut = nullptr;   // when set, render() hands back the CPU image instead of a texture (worker threads)   // radians: renders the sprite banked about its long (y) axis
 inline Texture2D render(int N, const std::vector<Part>& parts, Vector3 rim = { 0.45f, 0.65f, 1.f },
                         std::vector<unsigned char>* maskOut = nullptr, bool hd = false) {
     const float px = 2.0f / N;
@@ -208,6 +209,7 @@ inline Texture2D render(int N, const std::vector<Part>& parts, Vector3 rim = { 0
         }
 
     if (maskOut) { maskOut->resize(N * N); for (int i = 0; i < N * N; ++i) (*maskOut)[i] = pix[i].a; }
+    if (g_imgOut) { *g_imgOut = img; return Texture2D{}; }
     Texture2D tex = LoadTextureFromImage(img);
     UnloadImage(img);
     GenTextureMipmaps(&tex);

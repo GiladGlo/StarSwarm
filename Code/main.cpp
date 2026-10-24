@@ -8,6 +8,10 @@
 #include "raymath.h"
 #include "sprites.h"
 #include "meteor3d.h"
+#include "monsters.h"
+#include <thread>
+#include <atomic>
+#include <functional>
 
 #include <vector>
 #include <string>
@@ -54,10 +58,13 @@ static std::vector<Vector2> buildPath(const std::vector<Vector2>& ctrl) {
 // ----------------------------------------------------------------------------
 struct Gfx {
     Texture2D playerRoll[5]{};                         // banked frames: -30 -15 0 +15 +30 degrees
-    Texture2D player{}, bee[2]{}, fly[2]{}, boss[2]{}, bossDmg[2]{}, glow{}, nebula{};
+    Texture2D player{}, glow{}, nebula{};
+    // Space-monster enemies: MON_FRAMES-frame looping animations, rendered in parallel at startup
+    enum MonKind { MON_URCHIN, MON_MANTA, MON_JELLY, MON_JELLY_HIT, MON_IMP, MON_BRUTE, MON_LEVIATHAN, MON_SPAWN, MON_COUNT };
+    static constexpr int MON_FRAMES = 8, MON_N = 256;
+    Texture2D mon[MON_COUNT][MON_FRAMES]{};
     static constexpr int BOSS_N = 512;
     Texture2D meteor[7]{};                             // 3D tumble atlases (m3d); [6] = volatile rock
-    Texture2D dart{}, shielded[2]{}, splitter[2]{};    // later-wave enemy types
     Texture2D courier[2]{};                            // [1] = armour blown off
     Texture2D planet[10]{};                            // one backdrop body per boss cycle
     bool planetLoaded[10]{};
@@ -73,30 +80,61 @@ struct Gfx {
         const int N = 256;
         player = spr::playerShip(320);
         for (int i = 0; i < 5; ++i) playerRoll[i] = i == 2 ? player : spr::playerShip(320, -30.0f + 15 * i);
-        for (int f = 0; f < 2; ++f) {
-            bee[f] = spr::bee(N, f);
-            fly[f] = spr::butterfly(N, f);
-            boss[f] = spr::boss(N, f, false);
-            bossDmg[f] = spr::boss(N, f, true);
-        }
+        loadMonsters();
         for (int i = 0; i < 7; ++i) {   // 64-frame 3D tumble atlases (GPU-rendered); old sprite = fallback
             Texture2D flat = spr::meteor(192, i);
             meteor[i] = m3d::atlas(i, &flat);
             UnloadTexture(flat);
         }
-        dart = spr::dart(N);
         courier[0] = spr::courier(N, false); courier[1] = spr::courier(N, true);
-        for (int f = 0; f < 2; ++f) { shielded[f] = spr::shieldedBug(N, f); splitter[f] = spr::splitter(N, f); }
         glow = spr::glow(64);
         nebula = spr::nebula(300, 400);
     }
+    // CPU-render every monster frame on all cores (render() returns images via g_imgOut), then upload on this thread.
+    void loadMonsters() {
+        struct Job { int k, f; };
+        std::vector<Job> jobs;
+        for (int k = 0; k < MON_COUNT; ++k) for (int f = 0; f < MON_FRAMES; ++f) jobs.push_back({ k, f });
+        std::vector<Image> imgs(jobs.size());
+        std::atomic<int> next{ 0 };
+        auto worker = [&]() {
+            for (int j; (j = next++) < (int)jobs.size();) {
+                Image out{}; spr::g_imgOut = &out;
+                float ph = (float)jobs[j].f / MON_FRAMES;
+                switch (jobs[j].k) {
+                    case MON_URCHIN:    spr::novaUrchin(MON_N, ph); break;
+                    case MON_MANTA:     spr::voidManta(MON_N, ph); break;
+                    case MON_JELLY:     spr::nebulaJelly(MON_N, ph, false); break;
+                    case MON_JELLY_HIT: spr::nebulaJelly(MON_N, ph, true); break;
+                    case MON_IMP:       spr::cometImp(MON_N, ph); break;
+                    case MON_BRUTE:     spr::asteroidBrute(MON_N, ph); break;
+                    case MON_LEVIATHAN: spr::cosmicLeviathan(MON_N, ph); break;
+                    default:            spr::leviathanSpawn(MON_N, ph); break;
+                }
+                spr::g_imgOut = nullptr;
+                imgs[j] = out;
+            }
+        };
+        int nt = std::max(1u, std::min(16u, std::thread::hardware_concurrency()));
+        std::vector<std::thread> pool;
+        for (int i = 0; i < nt; ++i) pool.emplace_back(worker);
+        for (auto& t : pool) t.join();
+        for (size_t j = 0; j < jobs.size(); ++j) {
+            Texture2D& t = mon[jobs[j].k][jobs[j].f];
+            t = LoadTextureFromImage(imgs[j]);
+            UnloadImage(imgs[j]);
+            GenTextureMipmaps(&t);
+            SetTextureFilter(t, TEXTURE_FILTER_TRILINEAR);
+        }
+    }
     void unload() {
         for (int i : { 0, 1, 3, 4 }) UnloadTexture(playerRoll[i]);
-        for (Texture2D* t : { &player, &bee[0], &bee[1], &fly[0], &fly[1], &boss[0], &boss[1], &bossDmg[0], &bossDmg[1], &glow, &nebula })
+        for (auto& row : mon) for (auto& t : row) UnloadTexture(t);
+        for (Texture2D* t : { &player, &glow, &nebula })
             UnloadTexture(*t);
         for (int i = 0; i < 10; ++i) if (bossLoaded[i]) UnloadTexture(bossTex[i]);
         for (auto& m : meteor) UnloadTexture(m);
-        for (Texture2D* t : { &dart, &shielded[0], &shielded[1], &splitter[0], &splitter[1], &courier[0], &courier[1] }) UnloadTexture(*t);
+        for (Texture2D* t : { &courier[0], &courier[1] }) UnloadTexture(*t);
         for (int i = 0; i < 10; ++i) if (planetLoaded[i]) UnloadTexture(planet[i]);
     }
 };
@@ -142,7 +180,14 @@ static const std::vector<Formation> FORMATIONS = {
 };
 
 // Draw a ship texture centred at pos, `size` logical units wide, rotated, with a soft drop shadow.
-static void drawShip(const Texture2D& t, Vector2 pos, float size, float angleDeg, bool shadow = true, Color tint = WHITE) {
+static void drawShip(const Texture2D& t, Vector2 pos, float size, float angleDeg, bool shadow = true, Color tint = WHITE);
+// Animated monster: cross-fades the two nearest of its looping frames (ph = 0..1), shadow drawn once.
+static void drawMonster(const Texture2D* frames, int n, float ph, Vector2 pos, float size, float angleDeg, Color tint = WHITE) {
+    float x = (ph - floorf(ph)) * n; int i0 = (int)x % n, i1 = (i0 + 1) % n; float a = x - floorf(x);
+    drawShip(frames[i0], pos, size, angleDeg, true, tint);
+    if (a > 0.02f) drawShip(frames[i1], pos, size, angleDeg, false, Color{ tint.r, tint.g, tint.b, (unsigned char)(tint.a * a) });
+}
+static void drawShip(const Texture2D& t, Vector2 pos, float size, float angleDeg, bool shadow, Color tint) {
     Rectangle src{ 0, 0, (float)t.width, (float)t.height };
     if (shadow)
         DrawTexturePro(t, src, { pos.x + size * 0.12f, pos.y + size * 0.18f, size * 0.95f, size * 0.95f },
@@ -2680,10 +2725,13 @@ struct Game {
         drawMeteors();
         drawBoss();
 
-        int fr = fmodf(time, 0.5f) < 0.25f ? 0 : 1;
         for (auto& e : enemies) {
             if (e.state == DEAD || e.state == WAITING) continue;
-            int f = e.state == FORMATION ? fr : (fmodf(time, 0.16f) < 0.08f ? 0 : 1);
+            // each monster loops its own animation, offset per formation slot so a wave never moves in lockstep;
+            // divers animate faster
+            float off = spr::hash2(e.sx * 3.1f + 7, e.sy * 5.7f + 3);
+            auto ph = [&](float loopsPerSec) { return time * loopsPerSec * (e.state == DIVING ? 1.8f : 1.0f) + off; };
+            const int MF = Gfx::MON_FRAMES;
             float g = 0.3f + 0.7f * e.grow;
             if (e.grow < 1) {                  // engine burst while emerging from the hatch
                 BeginBlendMode(BLEND_ADDITIVE);
@@ -2691,20 +2739,21 @@ struct Game {
                 EndBlendMode();
             }
             switch (e.type) {
-                case BEE:       drawShip(gfx.bee[f], e.pos, 42 * g, e.angle); break;
-                case BUTTERFLY: drawShip(gfx.fly[f], e.pos, 46 * g, e.angle); break;
-                case BOSS:      drawShip(e.hp < 2 ? gfx.bossDmg[f] : gfx.boss[f], e.pos, 56 * g, e.angle); break;
+                case BEE:       drawMonster(gfx.mon[Gfx::MON_URCHIN], MF, ph(0.55f), e.pos, 42 * g, e.angle); break;
+                case BUTTERFLY: drawMonster(gfx.mon[Gfx::MON_MANTA], MF, ph(0.9f), e.pos, 46 * g, e.angle); break;
+                case BOSS:      drawMonster(gfx.mon[e.hp < 2 ? Gfx::MON_JELLY_HIT : Gfx::MON_JELLY], MF, ph(0.45f), e.pos, 56 * g, e.angle); break;
                 case DART: {
-                    if (e.state == DIVING) {        // afterburner streak while striking
+                    if (e.state == DIVING) {        // comet trail while striking
                         BeginBlendMode(BLEND_ADDITIVE);
                         Vector2 v = Vector2Normalize(Vector2Subtract(e.pos, e.prev));
-                        for (int k = 1; k <= 4; ++k) drawGlow(Vector2Subtract(e.pos, Vector2Scale(v, 8.0f * k)), 9 - k * 1.5f, Color{ 255, 120, 50, (unsigned char)(180 - k * 35) });
+                        for (int k = 1; k <= 5; ++k) drawGlow(Vector2Subtract(e.pos, Vector2Scale(v, 8.0f * k)), 11 - k * 1.6f,
+                                                              k < 3 ? Color{ 255, 120, 200, (unsigned char)(190 - k * 30) } : Color{ 120, 150, 255, (unsigned char)(170 - k * 28) });
                         EndBlendMode();
                     }
-                    drawShip(gfx.dart, e.pos, 40 * g, e.angle); break;
+                    drawMonster(gfx.mon[Gfx::MON_IMP], MF, ph(1.3f), e.pos, 40 * g, e.angle); break;
                 }
                 case SHIELDED:
-                    drawShip(gfx.shielded[f], e.pos, 44 * g, e.angle);
+                    drawMonster(gfx.mon[Gfx::MON_BRUTE], MF, ph(0.35f), e.pos, 44 * g, e.angle);
                     if (e.hp > 1) {                 // projected energy shield
                         float pl = 0.6f + 0.4f * sinf(time * 5 + e.sx);
                         BeginBlendMode(BLEND_ADDITIVE);
@@ -2714,7 +2763,7 @@ struct Game {
                         EndBlendMode();
                     }
                     break;
-                case SPLITTER: drawShip(gfx.splitter[f], e.pos, 46 * g, e.angle); break;
+                case SPLITTER: drawMonster(gfx.mon[Gfx::MON_LEVIATHAN], MF, ph(0.5f), e.pos, 46 * g, e.angle); break;
                 case COURIER: {
                     float S = 62 * g;
                     drawShip(gfx.courier[e.armourOff ? 1 : 0], e.pos, S, e.angle);
@@ -2733,7 +2782,7 @@ struct Game {
                     }
                     break;
                 }
-                case MINI:     drawShip(gfx.splitter[f], e.pos, 26 * g, e.angle); break;
+                case MINI:     drawMonster(gfx.mon[Gfx::MON_SPAWN], MF, ph(0.9f), e.pos, 26 * g, e.angle); break;
             }
         }
 
@@ -2976,9 +3025,10 @@ struct Game {
             int f = fmodf(time, 0.5f) < 0.25f ? 0 : 1;
             if (stageDialog) { drawStageDialogShapes(); return; }
             drawTitleParticles();
-            drawShip(gfx.boss[f], { W / 2.0f - 120, 340 }, 56, 0);
-            drawShip(gfx.fly[f],  { W / 2.0f - 120, 400 }, 46, 0);
-            drawShip(gfx.bee[f],  { W / 2.0f - 120, 460 }, 42, 0);
+            (void)f;
+            drawMonster(gfx.mon[Gfx::MON_JELLY],  Gfx::MON_FRAMES, time * 0.45f, { W / 2.0f - 120, 340 }, 56, 0);
+            drawMonster(gfx.mon[Gfx::MON_MANTA],  Gfx::MON_FRAMES, time * 0.9f + 0.3f, { W / 2.0f - 120, 400 }, 46, 0);
+            drawMonster(gfx.mon[Gfx::MON_URCHIN], Gfx::MON_FRAMES, time * 0.55f + 0.6f, { W / 2.0f - 120, 460 }, 42, 0);
             return;
         }
         for (int i = 0; i < std::max(0, lives - (playerAlive ? 1 : 0)); ++i)
@@ -3080,9 +3130,9 @@ struct Game {
                 drawCentered(TextFormat("STAGE %d", stage), H / 2 - 40, 40, SKYBLUE);
                 drawCentered(formationName.c_str(), H / 2 + 8, 18, Color{ 170, 210, 255, 255 });
                 int wn = cycleIndex() * 4 + (stage - 1) % CYCLE;
-                const char* intro = wn == NEW_TYPE_WAVE[0] ? "NEW ENEMY: DART - strikes straight down"
-                                  : wn == NEW_TYPE_WAVE[1] ? "NEW ENEMY: SHIELDED - takes 2 hits"
-                                  : wn == NEW_TYPE_WAVE[2] ? "NEW ENEMY: SPLITTER - bursts into two minis" : nullptr;
+                const char* intro = wn == NEW_TYPE_WAVE[0] ? "NEW MONSTER: COMET IMP - strikes straight down"
+                                  : wn == NEW_TYPE_WAVE[1] ? "NEW MONSTER: ASTEROID BRUTE - takes 2 hits"
+                                  : wn == NEW_TYPE_WAVE[2] ? "NEW MONSTER: COSMIC LEVIATHAN - bursts into two spawn" : nullptr;
                 if (intro) drawCentered(intro, H / 2 + 36, 15, Color{ 255, 210, 120, 255 });
             }
         }

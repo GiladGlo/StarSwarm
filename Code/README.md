@@ -70,9 +70,9 @@ The game runs in 10 cycles of 6 stages: **4 alien waves → a meteor field → a
 
 | Enemy | First appears | Behaviour | Points (formation / diving) |
 |---|---|---|---|
-| Dart | stage 2 | fast, near-straight strike dive | 120 / 240 |
-| Shielded | stage 8 | energy shield absorbs the first hit | 150 / 300 |
-| Splitter | stage 14 | bursts into two fast minis when destroyed | 100 / 200 |
+| Comet Imp | stage 2 | living comet with a fiery eye; fast, near-straight strike dive | 120 / 240 |
+| Asteroid Brute | stage 8 | magma-veined rock beast; energy shield absorbs the first hit | 150 / 300 |
+| Cosmic Leviathan | stage 14 | crowned eye-beast; bursts into two fast Leviathan Spawn when destroyed | 100 / 200 |
 
 Each 6-stage cycle has its own look: sky colours, nebula tint and a distant planet, star or black hole matching that cycle's boss.
 
@@ -107,11 +107,14 @@ On the title screen press **Ctrl+L** to open a dialog and start at any stage (1�
 
 ## Scoring
 
+All regular enemies are space monsters with smooth looping animation (8 frames each, cross-faded; every monster runs its own cycle so a wave never moves in lockstep). The frames are rendered on all CPU cores at startup.
+
+
 | Enemy | In formation | Diving |
 |---|---|---|
-| Bee (yellow) | 50 | 100 |
-| Butterfly (red) | 80 | 160 |
-| Boss (green, 2 hits) | 150 | 400 |
+| Nova Urchin (golden, spiny) | 50 | 100 |
+| Void Manta (blue, winged) | 80 | 160 |
+| Nebula Jelly (teal, 2 hits; turns violet when hit) | 150 | 400 |
 
 Extra ship at 20,000, then every 50,000. Each stage gets faster, with more simultaneous divers and more enemy fire.
 
