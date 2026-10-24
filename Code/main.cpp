@@ -1330,12 +1330,13 @@ struct Game {
     void drawEscMenuText() {
         Rectangle box = escBox();
         drawCentered("PAUSED", box.y + 22, 30, YELLOW);
-        const char* lbl[ESC_N] = { "1   RESUME GAME", "2   END CURRENT GAME", "3   EXIT TO DESKTOP" };
-        for (int i = 0; i < ESC_N; ++i) {
+        const char* lbl[ESC_N] = { "RESUME GAME", "END CURRENT GAME", "EXIT TO DESKTOP" };
+        float fs = 20 * scale, sp = customFont ? fs * 0.04f : fs / 10;
+        for (int i = 0; i < ESC_N; ++i) {   // number and label in fixed left-aligned columns
             Rectangle r = escBtn(i);
-            float fs = 20 * scale, sp = customFont ? fs * 0.04f : fs / 10;
-            Vector2 d = MeasureTextEx(font, lbl[i], fs, sp);
-            DrawTextEx(font, lbl[i], { origin.x + (r.x + r.width / 2) * scale - d.x / 2, origin.y + (r.y + r.height / 2) * scale - d.y / 2 }, fs, sp, RAYWHITE);
+            float y = origin.y + (r.y + r.height / 2) * scale - MeasureTextEx(font, "0", fs, sp).y / 2;
+            DrawTextEx(font, TextFormat("%d", i + 1), { origin.x + (r.x + 30) * scale, y }, fs, sp, Color{ 255, 230, 120, 255 });
+            DrawTextEx(font, lbl[i], { origin.x + (r.x + 72) * scale, y }, fs, sp, RAYWHITE);
         }
         drawCentered("UP/DOWN select    ENTER confirm    ESC resume", box.y + box.height - 30, 13, GRAY);
     }
