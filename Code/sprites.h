@@ -68,7 +68,7 @@ struct Part {
 struct Surf { Vector3 col{ 0, 0, 0 }; float h = 0, a = 0, emis = 0, gloss = 0, metal = 0; };
 
 inline Texture2D render(int N, const std::vector<Part>& parts, Vector3 rim = { 0.45f, 0.65f, 1.f },
-                        std::vector<unsigned char>* maskOut = nullptr) {
+                        std::vector<unsigned char>* maskOut = nullptr, bool hd = false) {
     const float px = 2.0f / N;
     std::vector<Surf> buf(N * N);
 
@@ -114,8 +114,27 @@ inline Texture2D render(int N, const std::vector<Part>& parts, Vector3 rim = { 0
             // cavity / ambient occlusion from local height
             float avg = (H(x - 3, y) + H(x + 3, y) + H(x, y - 3) + H(x, y + 3)) * 0.25f;
             float ao = sat(1 - std::max(0.f, avg - s.h) * 6);
+            float shadow = 0;
+            if (hd) {
+                // wider ambient occlusion (two more radii, 8 directions)
+                for (int rr : { N / 64, N / 28 }) {
+                    float occ = 0;
+                    for (int k = 0; k < 8; ++k) { float a = k * PI / 4;
+                        occ += std::max(0.f, H(x + (int)(cosf(a) * rr), y + (int)(sinf(a) * rr)) - s.h); }
+                    ao *= sat(1 - occ / 8 * 3.0f);
+                }
+                // self-shadowing: march towards the light over the height field
+                const float lx = -0.569f, ly = -0.822f, rise = 2.2f;   // light direction (xy) and how fast the ray climbs
+                for (int k = 1; k <= N / 14; ++k) {
+                    float dist = k * 1.5f * px;
+                    float hs = H(x + (int)lroundf(lx * k * 1.5f), y + (int)lroundf(ly * k * 1.5f));
+                    float occl = hs - (s.h + dist * rise);
+                    if (occl > 0) shadow = std::max(shadow, sat(occl / 0.02f) * (1 - (float)k / (N / 14 + 1) * 0.5f));
+                }
+            }
             Vector3 env = mix(rgb(10, 12, 30), rgb(150, 175, 230), sat(0.5f - 0.6f * n.y));
             Vector3 c = s.col;
+            diff *= 1 - 0.75f * shadow; spec *= 1 - shadow;
             Vector3 out = Vector3Scale(c, (0.22f + 0.9f * diff) * (1 - s.metal * 0.45f) * ao);
             out = Vector3Add(out, Vector3Multiply(Vector3Scale(env, 0.55f * s.metal), c));
             out = Vector3Add(out, Vector3Scale(mix({ 1, 1, 1 }, c, s.metal * 0.5f), spec));
@@ -477,83 +496,258 @@ inline float bossWingSdf(int id, Vector2 p) {
     return 1;
 }
 
+// ---- HD detail helpers -------------------------------------------------------
+inline float vnoise(Vector2 p) {
+    float ix = floorf(p.x), iy = floorf(p.y), fx = p.x - ix, fy = p.y - iy;
+    fx = fx * fx * (3 - 2 * fx); fy = fy * fy * (3 - 2 * fy);
+    float a = hash2(ix, iy), b = hash2(ix + 1, iy), c = hash2(ix, iy + 1), d = hash2(ix + 1, iy + 1);
+    return a + (b - a) * fx + (c - a) * fy + (a - b - c + d) * fx * fy;
+}
+inline float fbm(Vector2 p, int oct) {
+    float s = 0, a = 0.5f;
+    for (int i = 0; i < oct; ++i) { s += a * vnoise(p); p = { p.x * 2.03f + 1.7f, p.y * 2.03f + 9.2f }; a *= 0.5f; }
+    return s;
+}
+
+// Plated, greebled, weathered hull surface. sc: detail scale; wing: lighter detailing; seed: per-ship variation.
+inline void hullDetail(Vector2 p, float d, Vector3& c, float& h, float& e, const struct BossDesign& B, float sc, float seed, bool wing);
+inline void chitinDetail(Vector2 p, float d, Vector3& c, float& h, float& e, const struct BossDesign& B, float sc);
+
+// Outermost point of a boss silhouette (starboard side, unit coords): where its navigation lights sit.
+inline Vector2 bossNavTip(int idx) {
+    const BossDesign& B = bossDesigns()[idx];
+    Vector2 tip{ 0, 0 };
+    for (float y = -0.95f; y <= 0.95f; y += 0.01f) for (float x = 0.95f; x > tip.x; x -= 0.01f) {
+        float dd = std::min(bossHullSdf(B.hull, { x, y }), B.wings ? bossWingSdf(B.wings, { x, y }) : 1.f);
+        if (dd < -0.035f) { tip = { x, y }; break; }
+    }
+    return tip;
+}
+
 inline Texture2D bossShip(int idx, int N, std::vector<unsigned char>* mask) {
     const BossDesign& B = bossDesigns()[idx];
     std::vector<Part> P;
-    auto panels = [](Vector2 p, Vector3& c, float& h, float step) {
-        Vector2 q = M(p);
-        float gx = q.x / step - floorf(q.x / step), gy = (p.y + 1) / (step * 0.7f) - floorf((p.y + 1) / (step * 0.7f));
-        if (gx < 0.04f || gy < 0.05f) { h -= 0.025f; c = Vector3Scale(c, 0.55f); }
-        c = Vector3Scale(c, 0.9f + 0.1f * hash2(floorf(q.x / step), floorf((p.y + 1) / (step * 0.7f))));
-    };
-    auto flesh = [](Vector2 p, Vector3& c, float& h) {
-        Vector2 q = M(p);
-        float v = fabsf(sinf(q.x * 18 + sinf(p.y * 11) * 2.5f) * sinf(p.y * 15 + cosf(q.x * 9) * 2.f));
-        if (v < 0.08f) { c = Vector3Scale(c, 0.45f); h -= 0.03f; }
-        h += 0.02f * sinf(q.x * 30) * sinf(p.y * 30);
-    };
     bool org = B.organic;
-    // engines (pods + glowing nozzles)
+    float seed = 7.3f * (idx + 1);
+    Vector3 gun = rgb(52, 54, 64);
+    // engines: ribbed pods with heat-tinted collars, nozzles with hot cores
     for (Vector2 e : B.engines) {
-        P.push_back({ [=](Vector2 p) { return sdCapsule(p, { e.x, e.y + 0.22f }, { e.x, e.y }, 0.09f, 0.07f); },
+        P.push_back({ [=](Vector2 p) { return sdCapsule(p, { e.x, e.y + 0.22f }, { e.x, e.y }, 0.095f, 0.075f); },
                       B.hull2Col, 0.14f, 0.18f, 0.07f, org ? 0.2f : 0.85f, 0.7f, 0, 1,
-                      [=](Vector2 p, float, Vector3& c, float& h, float&) {
-                          if (org) { flesh(p, c, h); return; }
-                          float f = p.y * 22 - floorf(p.y * 22); if (f < 0.18f) { c = Vector3Scale(c, 0.5f); h -= 0.02f; } } });
-        P.push_back({ [=](Vector2 p) { return sdEllipse(p, { e.x, e.y - 0.02f }, { 0.07f, 0.035f }); },
-                      B.engine, 0.2f, 0.04f, 0.03f, 0, 0.3f, 1.6f });
+                      [=](Vector2 p, float d, Vector3& c, float& h, float& em) {
+                          if (org) { chitinDetail(p, d, c, h, em, B, 0.6f); return; }
+                          float f = p.y * 26 - floorf(p.y * 26);
+                          if (f < 0.16f) { c = Vector3Scale(c, 0.45f); h -= 0.015f; }
+                          else if (f < 0.3f) { h += 0.004f; c = Vector3Scale(c, 1.12f); }
+                          float collar = sstep(e.y + 0.08f, e.y, p.y);                 // heat discolouration near the nozzle
+                          c = mix(c, mix(rgb(70, 60, 110), Vector3Scale(B.engine, 0.6f), 0.4f), 0.55f * collar);
+                          if (fabsf(p.x - e.x) < 0.012f && p.y > e.y + 0.05f) { c = Vector3Scale(c, 0.6f); h -= 0.006f; }  // fuel line
+                          if (d > -0.012f) c = Vector3Scale(c, 1.25f);                   // worn edge
+                      } });
+        P.push_back({ [=](Vector2 p) { return sdEllipse(p, { e.x, e.y - 0.02f }, { 0.075f, 0.038f }); },
+                      B.engine, 0.2f, 0.04f, 0.03f, 0, 0.3f, 1.6f, 1,
+                      [=](Vector2 p, float d, Vector3& c, float& h, float& em) {
+                          float r = sat(-d / 0.035f);                                   // 0 at rim -> 1 at centre
+                          c = mix(Vector3Scale(B.engine, 0.55f), mix(B.engine, { 1, 1, 1 }, 0.7f), r * r);
+                          em = 0.5f + 1.6f * r;
+                          if (fabsf(r - 0.35f) < 0.06f) { c = Vector3Scale(c, 0.4f); em *= 0.4f; h -= 0.01f; }   // nozzle vane ring
+                      } });
     }
     // wings
     if (B.wings)
         P.push_back({ [=](Vector2 p) { return bossWingSdf(B.wings, p); },
                       B.hull2Col, 0.12f, 0.14f, 0.07f, org ? 0.15f : 0.8f, org ? 0.8f : 0.6f, 0, org ? 0.9f : 1.0f,
                       [=](Vector2 p, float d, Vector3& c, float& h, float& e) {
-                          if (org) { flesh(p, c, h); if (d > -0.03f) c = B.accent; float v = fabsf(sinf(atan2f(p.y, fabsf(p.x)) * 10)); if (v < 0.1f) c = B.trim; return; }
-                          panels(p, c, h, 0.12f);
-                          if (d > -0.03f) c = B.accent;
+                          if (org) { chitinDetail(p, d, c, h, e, B, 0.8f);
+                                     if (d > -0.03f) c = Vector3Scale(B.accent, 0.8f);
+                                     float v = fabsf(sinf(atan2f(p.y, fabsf(p.x)) * 10)); if (v < 0.08f) { c = B.trim; e = 0.25f; } return; }
+                          hullDetail(p, d, c, h, e, B, 0.8f, seed + 3, true);
+                          if (d > -0.03f) c = Vector3Scale(B.accent, 0.92f + 0.12f * fbm({ p.x * 40, p.y * 40 }, 2));   // painted leading edge
+                          if (d > -0.03f && d < -0.024f) { c = Vector3Scale(c, 0.5f); h -= 0.006f; }
                           if (B.wings == 3 && fabsf(sinf(atan2f(p.y, p.x) * 24)) < 0.15f) { c = B.trim; e = 0.5f; }
                       } });
-    // turret bases and barrels
+    // turret mounts with twin barrels
     for (Vector2 t : B.turrets) {
-        P.push_back({ [=](Vector2 p) { return sdCapsule(p, t, { t.x, t.y + 0.2f }, 0.025f, 0.018f); },
-                      rgb(45, 45, 55), 0.3f, 0.06f, 0.03f, 0.9f, 0.8f });
-        P.push_back({ [=](Vector2 p) { return sdCircle(p, t, 0.07f); },
+        for (float sx : { -0.022f, 0.022f })
+            P.push_back({ [=](Vector2 p) { return sdCapsule(p, { t.x + sx, t.y }, { t.x + sx, t.y + 0.21f }, 0.017f, 0.013f); },
+                          gun, 0.3f, 0.06f, 0.03f, 0.9f, 0.85f, 0, 1,
+                          [=](Vector2 p, float, Vector3& c, float& h, float& em) {
+                              float f = (p.y - t.y) * 60; f -= floorf(f); if (f < 0.2f) { c = Vector3Scale(c, 0.55f); h -= 0.004f; }
+                              if (p.y > t.y + 0.19f) { c = rgb(20, 20, 24); em = 0; }   // muzzle bore
+                          } });
+        P.push_back({ [=](Vector2 p) { return sdCircle(p, t, 0.075f); },
                       org ? B.accent : B.hullCol, 0.32f, 0.12f, 0.06f, org ? 0.2f : 0.85f, 0.85f, org ? 0.4f : 0.f, 1,
-                      [=](Vector2 p, float d, Vector3& c, float&, float&) { if (d > -0.015f) c = B.trim; (void)p; } });
+                      [=](Vector2 p, float d, Vector3& c, float& h, float& em) {
+                          Vector2 r = Vector2Subtract(p, t); float rr = Vector2Length(r), a = atan2f(r.y, r.x);
+                          if (d > -0.015f) { c = B.trim; if (sinf(a * 12) > 0.7f) { c = Vector3Scale(c, 0.6f); h -= 0.005f; } }   // bolted ring
+                          else if (fabsf(rr - 0.036f) < 0.005f) { c = Vector3Scale(c, 0.45f); h -= 0.008f; }
+                          else if (rr < 0.03f) { c = Vector3Scale(c, 1.1f); h += 0.01f; }
+                          if (!org && fabsf(r.x) < 0.006f && r.y < -0.02f && r.y > -0.055f) { c = B.core; em = 1.2f; }   // sensor
+                      } });
     }
     // main hull
     P.push_back({ [=](Vector2 p) { return bossHullSdf(B.hull, p); },
                   B.hullCol, 0.22f, 0.32f, 0.2f, org ? 0.15f : 0.8f, org ? 0.85f : 0.65f, 0, 1,
-                  [=](Vector2 p, float d, Vector3& c, float& h, float&) {
-                      if (org) { flesh(p, c, h); if (d > -0.03f) c = Vector3Scale(c, 0.6f); return; }
-                      panels(p, c, h, 0.1f);
+                  [=](Vector2 p, float d, Vector3& c, float& h, float& e) {
+                      if (org) { chitinDetail(p, d, c, h, e, B, 1.0f); if (d > -0.03f) c = Vector3Scale(c, 0.6f); return; }
+                      hullDetail(p, d, c, h, e, B, 1.0f, seed, false);
                       Vector2 q = M(p);
-                      if (q.x < 0.012f && p.y > -0.4f) { h -= 0.04f; c = Vector3Scale(c, 0.4f); }
-                      if (fabsf(fabsf(q.x - 0.22f) - 0.0f) < 0.02f && p.y > -0.3f && p.y < 0.3f) c = Vector3Scale(B.accent, 0.85f);
-                      if (d > -0.025f) c = B.trim;
+                      if (q.x < 0.012f && p.y > -0.4f) { h -= 0.03f; c = Vector3Scale(c, 0.35f); }        // keel trench
+                      if (q.x < 0.012f && p.y > -0.4f && fmodf(p.y + 2, 0.05f) < 0.008f) { c = B.core; e = 1.0f; }   // trench lights
+                      if (fabsf(q.x - 0.22f) < 0.02f && p.y > -0.3f && p.y < 0.3f) {                  // racing stripes
+                          c = Vector3Scale(B.accent, 0.85f * (0.85f + 0.3f * fbm({ p.x * 30, p.y * 30 }, 2))); }
+                      if (d > -0.025f) { c = Vector3Scale(B.trim, 0.92f + 0.12f * fbm({ p.x * 40, p.y * 40 }, 2));
+                                         if (d < -0.019f) { c = Vector3Scale(c, 0.55f); h -= 0.006f; } }
                   } });
-    // armored ring + reactor core
+    // armoured ring + reactor core
     P.push_back({ [=](Vector2 p) { return sdCircle(p, B.coreP, B.coreR + 0.055f); },
-                  org ? B.hull2Col : B.hull2Col, 0.5f, 0.12f, 0.06f, org ? 0.2f : 0.9f, 0.85f, 0, 1,
-                  [=](Vector2 p, float, Vector3& c, float& h, float&) {
+                  B.hull2Col, 0.5f, 0.12f, 0.06f, org ? 0.2f : 0.9f, 0.85f, 0, 1,
+                  [=](Vector2 p, float d, Vector3& c, float& h, float& em) {
                       float a = atan2f(p.y - B.coreP.y, p.x - B.coreP.x);
-                      if (sinf(a * 8) > 0.6f) { c = org ? B.accent : B.trim; h += 0.02f; } } });
-    P.push_back({ [=](Vector2 p) { return sdCircle(p, B.coreP, B.coreR); }, B.core, 0.62f, 0.12f, 0.08f, 0.1f, 1.0f, 1.6f });
-    // bridge glass / eyes
+                      float rr = Vector2Distance(p, B.coreP);
+                      if (sinf(a * 8) > 0.6f) { c = org ? B.accent : B.trim; h += 0.02f; }
+                      if (fabsf(sinf(a * 8)) < 0.08f) { c = Vector3Scale(c, 0.4f); h -= 0.01f; }       // segment gaps
+                      if (!org && sinf(a * 8) <= 0.6f && fabsf(rr - (B.coreR + 0.028f)) < 0.006f && sinf(a * 32) > 0.3f) {
+                          c = B.core; em = 0.9f; }                                                    // conduit lights
+                      if (d > -0.008f) c = Vector3Scale(c, 0.6f);
+                  } });
+    P.push_back({ [=](Vector2 p) { return sdCircle(p, B.coreP, B.coreR); }, B.core, 0.62f, 0.12f, 0.08f, 0.1f, 1.0f, 1.6f, 1,
+                  [=](Vector2 p, float d, Vector3& c, float&, float& em) {
+                      float r = sat(-d / B.coreR); float a = atan2f(p.y - B.coreP.y, p.x - B.coreP.x);
+                      c = mix(B.core, { 1, 1, 1 }, r * r * 0.8f);
+                      em = 1.2f + 1.0f * r + 0.25f * sinf(a * 6 + r * 9);                         // swirling plasma
+                  } });
+    // bridge: glass canopy with lit window rows / organic eyes
     Vector2 br{ B.coreP.x, B.coreP.y - B.coreR - 0.12f };
     if (org) {
         P.push_back({ [=](Vector2 p) { return sdEllipse(M(p), { 0.1f, br.y + 0.02f }, { 0.06f, 0.04f }, -20); },
-                      B.glass, 0.55f, 0.08f, 0.04f, 0.1f, 1.0f, 1.2f });
+                      B.glass, 0.55f, 0.08f, 0.04f, 0.1f, 1.0f, 1.2f, 1,
+                      [=](Vector2 p, float d, Vector3& c, float&, float& em) {
+                          float r = sat(-d / 0.035f); c = mix(Vector3Scale(B.glass, 0.6f), rgb(255, 230, 120), r * r); em = 0.8f + r;
+                          if (fabsf(M(p).x - 0.1f) < 0.006f) { c = rgb(10, 5, 5); em = 0; }   // slit pupil
+                      } });
     } else {
-        P.push_back({ [=](Vector2 p) { return sdEllipse(p, br, { 0.13f, 0.06f }); },
+        P.push_back({ [=](Vector2 p) { return sdEllipse(p, br, { 0.14f, 0.065f }); },
                       B.glass, 0.55f, 0.12f, 0.06f, 0.2f, 1.0f, 0.35f, 1,
-                      [](Vector2 p, float, Vector3& c, float&, float&) { if (fabsf(sinf(p.x * 60)) < 0.12f) c = Vector3Scale(c, 0.5f); } });
+                      [=](Vector2 p, float d, Vector3& c, float&, float& em) {
+                          if (d > -0.012f) { c = B.trim; em = 0; return; }                   // frame
+                          float wx = (p.x - br.x) * 95, wy = (p.y - br.y) * 95;
+                          bool frame = fabsf(sinf(wx)) < 0.25f || fabsf(sinf(wy * 1.3f)) < 0.2f;
+                          if (frame) { c = Vector3Scale(B.trim, 0.5f); em = 0; }
+                          else { bool lit = hash2(floorf(wx / PI), floorf(wy * 1.3f / PI)) > 0.15f;
+                                 c = lit ? mix(rgb(255, 220, 160), B.glass, 0.35f) : Vector3Scale(B.glass, 0.5f); em = lit ? 0.9f : 0.15f; }
+                      } });
+    }
+    // navigation lights at the outermost points of the silhouette (red port, green starboard)
+    if (!org) {
+        Vector2 tip = bossNavTip(idx);
+        for (int sgn : { -1, 1 }) {
+            Vector2 lp{ tip.x * sgn, tip.y };
+            Vector3 lc = sgn < 0 ? rgb(255, 50, 50) : rgb(60, 255, 110);
+            P.push_back({ [=](Vector2 p) { return sdCircle(p, lp, 0.016f); }, lc, 0.4f, 0.03f, 0.02f, 0, 1, 1.8f });
+        }
     }
     // prow cannon
     Vector2 m = B.muzzle;
-    P.push_back({ [=](Vector2 p) { return sdCapsule(p, { m.x, m.y - 0.24f }, m, 0.045f, 0.03f); }, B.trim, 0.45f, 0.1f, 0.04f, 1.0f, 0.9f });
-    P.push_back({ [=](Vector2 p) { return sdCircle(p, m, 0.028f); }, B.core, 0.5f, 0.03f, 0.02f, 0, 1, 1.4f });
-    return render(N, P, Vector3Scale(B.core, 0.8f), mask);
+    P.push_back({ [=](Vector2 p) { return sdCapsule(p, { m.x, m.y - 0.24f }, m, 0.048f, 0.03f); }, B.trim, 0.45f, 0.1f, 0.04f, 1.0f, 0.9f, 0, 1,
+                  [=](Vector2 p, float d, Vector3& c, float& h, float&) {
+                      float f = (p.y - m.y) * 45; f -= floorf(f); if (f < 0.2f) { c = Vector3Scale(c, 0.5f); h -= 0.006f; }   // cooling rings
+                      if (fabsf(p.x - m.x) < 0.006f) c = Vector3Scale(c, 1.3f);
+                      if (d > -0.008f) c = Vector3Scale(c, 0.7f);
+                  } });
+    P.push_back({ [=](Vector2 p) { return sdCircle(p, m, 0.03f); }, B.core, 0.5f, 0.03f, 0.02f, 0, 1, 1.4f });
+    return render(N, P, Vector3Scale(B.core, 0.8f), mask, true);
+}
+
+inline void hullDetail(Vector2 p, float d, Vector3& c, float& h, float& e, const BossDesign& B, float sc, float seed, bool wing) {
+    Vector2 q = M(p);
+    // --- plating: staggered rows of plates, some split in two; raised/recessed with bevelled seams
+    float rowH = 0.12f * sc, ry = (p.y + 1.3f) / rowH, row = floorf(ry);
+    float colW = (0.14f + 0.12f * hash2(row, seed)) * sc, off = hash2(seed, row) * colW;
+    float rx = (q.x + off) / colW, col = floorf(rx);
+    float lx = rx - col, ly = ry - row, pw = colW, ph = rowH, sub = 0;
+    float r = hash2(row * 1.3f + seed, col * 2.1f);
+    if (r < 0.35f)      { if (ly < 0.5f) ly *= 2; else { ly = ly * 2 - 1; sub = 1; } ph *= 0.5f; }
+    else if (r > 0.72f) { if (lx < 0.5f) lx *= 2; else { lx = lx * 2 - 1; sub = 2; } pw *= 0.5f; }
+    float sdx = std::min(lx, 1 - lx) * pw, sdy = std::min(ly, 1 - ly) * ph, sd = std::min(sdx, sdy);
+    float pid = hash2(row + sub * 7.1f, col + seed);
+    float bev = sstep(0.0f, 0.011f, sd);
+    h += ((pid - 0.5f) * 0.016f + 0.005f) * bev;
+    c = Vector3Scale(c, 0.93f + 0.16f * pid);
+    if (pid > 0.9f) c = mix(c, B.hull2Col, 0.65f);                                  // replacement plates
+    if (sd < 0.004f) { h -= 0.008f; c = Vector3Scale(c, 0.4f); }
+    float along = sdx < sdy ? ly * ph : lx * pw;
+    (void)along;
+
+    // --- window rows (hull only)
+    if (!wing && d < -0.07f && hash2(row, seed + 3) < 0.08f && ly > 0.42f && ly < 0.58f && sd > 0.012f) {
+        float wx = fmodf(q.x + 2, 0.022f);
+        if (wx < 0.008f) {
+            bool lit = hash2(floorf((q.x + 2) / 0.022f), row) > 0.3f;
+            c = lit ? rgb(235, 190, 130) : Vector3Scale(c, 0.35f); e = lit ? 0.7f : 0; h -= 0.004f;
+            return;
+        }
+    }
+    // --- greebles on a finer grid (kept away from the outline)
+    if (d < -0.035f) {
+        float gs = 0.058f * sc;
+        float gxf = q.x / gs, gyf = (p.y + 1.3f) / gs, gx = floorf(gxf), gy = floorf(gyf);
+        float u = gxf - gx - 0.5f, v = gyf - gy - 0.5f;
+        float gr = hash2(gx * 3.7f + seed, gy * 1.9f + seed * 0.3f);
+        float dens = wing ? 0.45f : 0.7f;
+        if (gr < 0.10f * dens) {                                                        // raised equipment box
+            float bw = 0.26f + 0.16f * hash2(gx, gy + 3), bh = 0.2f + 0.2f * hash2(gx + 5, gy);
+            float bd = std::max(fabsf(u) - bw, fabsf(v) - bh);
+            if (bd < 0) { h += 0.02f * sstep(0, 0.07f, -bd); c = Vector3Scale(c, bd > -0.05f ? 0.62f : 0.8f);
+                          if (fabsf(u) < bw - 0.08f && fabsf(v) < 0.04f) c = Vector3Scale(c, 0.6f); }
+        } else if (gr < 0.18f * dens) {                                                 // vent grille
+            if (fabsf(u) < 0.4f && fabsf(v) < 0.32f) {
+                float sl = (v + 0.32f) * 7; sl -= floorf(sl);
+                c = Vector3Scale(c, 0.62f);
+                if (sl < 0.45f) { h -= 0.01f; c = Vector3Scale(c, 0.3f); }
+            }
+        } else if (gr < 0.23f * dens) {                                                 // round hatch
+            float rr = sqrtf(u * u + v * v);
+            if (fabsf(rr - 0.33f) < 0.05f) { h -= 0.008f; c = Vector3Scale(c, 0.45f); }
+            else if (rr < 0.28f) { h += 0.004f; c = Vector3Scale(c, 0.92f); if (fabsf(u) < 0.04f || fabsf(v) < 0.04f) c = Vector3Scale(c, 0.8f); }
+        } else if (gr < 0.30f * dens) {                                                 // pipe run
+            if (fabsf(v) < 0.12f) { float t = v / 0.12f; h += 0.016f * sqrtf(std::max(0.f, 1 - t * t));
+                                    c = mix(Vector3Scale(c, 0.7f), rgb(160, 160, 170), 0.35f);
+                                    float j = u + 0.5f; j = j * 2 - floorf(j * 2); if (j < 0.1f) c = Vector3Scale(c, 0.55f); }
+        } else if (gr < 0.33f * dens) {                                                 // marker / beacon light
+            if (u * u + v * v < 0.014f) { c = hash2(gx, gy * 3) > 0.5f ? B.core : rgb(255, 240, 220); e = 1.3f; }
+        }
+    }
+    // --- weathering: grime streaks, dusty mottling, soot behind engines, chipped edges
+    float streak = fbm({ q.x * 60 + seed, p.y * 3.5f }, 3);
+    float dust = fbm({ p.x * 8 + seed, p.y * 8 }, 4);
+    c = Vector3Scale(c, (0.82f + 0.3f * streak) * (0.86f + 0.24f * dust));
+    for (Vector2 en : B.engines) {
+        float dd = Vector2Distance(p, { en.x, en.y + 0.25f });
+        c = Vector3Scale(c, 1 - 0.35f * expf(-dd * dd / 0.012f));
+    }
+    if (d > -0.05f && hash2(floorf(p.x * 160), floorf(p.y * 160)) > 0.95f) c = Vector3Scale(c, 1.15f);
+}
+
+inline void chitinDetail(Vector2 p, float d, Vector3& c, float& h, float& e, const BossDesign& B, float sc) {
+    Vector2 q = M(p);
+    float s = 0.07f * sc, gxf = q.x / s, gyf = (p.y + 1.3f) / s, gx = floorf(gxf), gy = floorf(gyf);
+    float f1 = 9, f2 = 9, id = 0;
+    for (int oy = -1; oy <= 1; ++oy) for (int ox = -1; ox <= 1; ++ox) {
+        float cx = gx + ox, cy = gy + oy;
+        float px = cx + 0.15f + 0.7f * hash2(cx, cy), py = cy + 0.15f + 0.7f * hash2(cy * 1.3f, cx);
+        float dd = sqrtf((gxf - px) * (gxf - px) + (gyf - py) * (gyf - py));
+        if (dd < f1) { f2 = f1; f1 = dd; id = hash2(cx + 3, cy); } else if (dd < f2) f2 = dd;
+    }
+    float border = f2 - f1;
+    h += 0.028f * (1 - std::min(1.f, f1 * 1.15f));                                   // domed scales
+    c = Vector3Scale(c, 0.7f + 0.45f * id);
+    if (border < 0.09f) { h -= 0.018f; c = Vector3Scale(c, 0.3f); }
+    else if (border < 0.16f) c = Vector3Scale(c, 0.7f);
+    if (id > 0.92f && f1 < 0.28f && d < -0.03f) { float g = 1 - f1 / 0.28f; c = mix(c, B.core, g); e = 1.3f * g; h += 0.01f * g; }   // glowing pustules
+    float v = fabsf(fbm({ q.x * 6.5f, p.y * 6.5f }, 3) * 2 - 1);
+    if (v < 0.035f) { c = mix(c, B.accent, 0.75f); h -= 0.008f; e = std::max(e, 0.15f); }   // veins
+    c = Vector3Scale(c, 0.85f + 0.25f * fbm({ p.x * 12, p.y * 12 }, 3));
 }
 
 // ============================================================== METEORS ==

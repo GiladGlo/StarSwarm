@@ -50,7 +50,7 @@ static std::vector<Vector2> buildPath(const std::vector<Vector2>& ctrl) {
 // ----------------------------------------------------------------------------
 struct Gfx {
     Texture2D player{}, bee[2]{}, fly[2]{}, boss[2]{}, bossDmg[2]{}, glow{}, nebula{};
-    static constexpr int BOSS_N = 384;
+    static constexpr int BOSS_N = 512;
     Texture2D meteor[7]{};                             // 3D tumble atlases (m3d); [6] = volatile rock
     Texture2D dart{}, shielded[2]{}, splitter[2]{};    // later-wave enemy types
     Texture2D courier[2]{};                            // [1] = armour blown off
@@ -331,7 +331,7 @@ struct Boss {
     BossAttack attack = A_NONE;
     Vector2 pos{ 0, -160 };
     float hp = 0, maxHp = 1, t = 0, moveT = 0, attackTimer = 2, attackT = 0, flash = 0, dyingT = 0, emitT = 0, fireT = 0;
-    float vx = 0, ignite = 0;                 // horizontal speed (Scythe Beam lean) and beam-ignition flash
+    float vx = 0, ignite = 0, dmgT = 0;                 // horizontal speed (Scythe Beam lean) and beam-ignition flash
     int   step = 0, lastAttack = A_NONE;
     const spr::BossDesign& D() const { return spr::bossDesigns()[index]; }
     float size() const { return D().size; }
@@ -581,6 +581,7 @@ struct Game {
 
     void startMeteorField() {
         meteorField = true; fieldT = 0; spawnT = 0;
+        gfx.ensureBoss(std::clamp((stage + 1) / CYCLE - 1, 0, BOSS_COUNT - 1));   // build the coming boss now
         fieldDur = 30.0f + 2.0f * cycleIndex();
         targetDensity = std::min(0.45f, 0.30f + 0.017f * cycleIndex());
         bannerTimer = 3.0f;
@@ -796,6 +797,25 @@ struct Game {
         Boss& b = boss;
         if (!b.active) return;
         b.t += dt;
+        if (b.state == B_FIGHT && b.phase() > 0 && (b.dmgT -= dt) <= 0) {
+            int ph = b.phase();
+            b.dmgT = ph == 1 ? frand(0.25f, 0.45f) : frand(0.08f, 0.18f);
+            for (int tries = 0; tries < 12; ++tries) {
+                Vector2 q = b.W2({ frand(-0.8f, 0.8f), frand(-0.6f, 0.6f) });
+                if (!b.hitTest(q)) continue;
+                for (int i = 0; i < 5 + 3 * ph; ++i) {
+                    float ang = frand(0, 2 * PI), sp = frand(60, 200), life = frand(0.2f, 0.5f);
+                    parts.push_back({ q, { cosf(ang) * sp, sinf(ang) * sp }, life, life, frand(1.2f, 2.4f),
+                                      GetRandomValue(0, 1) ? Color{ 255, 220, 140, 255 } : Color{ 255, 140, 60, 255 }, SPARK });
+                }
+                float life = frand(0.8f, 1.5f);
+                parts.push_back({ q, { frand(-15, 15), frand(-60, -30) }, life, life, frand(8, 14) * (0.7f + 0.3f * ph),
+                                  Color{ 60, 55, 60, 255 }, SMOKE });
+                if (ph == 2) { float l2 = frand(0.4f, 0.8f);
+                    parts.push_back({ q, { frand(-10, 10), frand(-50, -20) }, l2, l2, frand(5, 9), Color{ 255, 120, 40, 255 }, EMBER }); }
+                break;
+            }
+        }
         b.flash = std::max(0.0f, b.flash - dt);
         float hover = 150 + b.size() * 0.12f;
 
@@ -1079,9 +1099,11 @@ struct Game {
         BeginBlendMode(BLEND_ADDITIVE);
         for (Vector2 e : D.engines) {
             Vector2 n{ p.x + e.x * S / 2, p.y + (e.y - 0.03f) * S / 2 };
-            float fl = 0.85f + 0.15f * sinf(time * 45 + e.x * 10);
-            drawGlow(n, 20 * fl, Color{ eng.r, eng.g, eng.b, 160 });
-            DrawTriangle({ n.x + 8, n.y }, { n.x, n.y - 30 * fl }, { n.x - 8, n.y }, Color{ eng.r, eng.g, eng.b, 140 });
+            float fl = 0.8f + 0.12f * sinf(time * 45 + e.x * 10) + 0.08f * sinf(time * 71 + e.x * 23);
+            drawGlow(n, 22 * fl, Color{ eng.r, eng.g, eng.b, 160 });
+            DrawTriangle({ n.x + 9, n.y }, { n.x, n.y - 36 * fl }, { n.x - 9, n.y }, Color{ eng.r, eng.g, eng.b, 110 });
+            DrawTriangle({ n.x + 4.5f, n.y }, { n.x, n.y - 22 * fl }, { n.x - 4.5f, n.y }, Color{ 255, 255, 255, 150 });   // hot inner core
+            drawGlow({ n.x, n.y - 30 * fl }, 10, Color{ eng.r, eng.g, eng.b, 60 });
         }
         EndBlendMode();
         Color tint = WHITE;
@@ -1093,8 +1115,58 @@ struct Game {
         if (b.flash > 0)
             DrawTexturePro(tex, { 0, 0, (float)tex.width, (float)tex.height }, { p.x, p.y, S, S }, { S / 2, S / 2 }, 0,
                            Color{ 255, 255, 255, (unsigned char)(150 * b.flash / 0.07f) });
-        float cp = 0.7f + 0.3f * sinf(time * 6);
-        drawGlow({ p.x + D.coreP.x * S / 2, p.y + D.coreP.y * S / 2 }, 30 * cp * (1 + 0.3f * b.phase()), bossColor(D.core, 150));
+        // --- living reactor: double-beat heartbeat that quickens as the boss is damaged
+        Vector2 cc{ p.x + D.coreP.x * S / 2, p.y + D.coreP.y * S / 2 };
+        float rc = D.coreR * S / 2;
+        int ph = b.phase();
+        float period = 1.3f / (1 + 0.45f * ph), tb = fmodf(time + b.index * 0.37f, period);
+        auto bump = [](float x, float w) { return expf(-(x / w) * (x / w)); };
+        float hb = bump(tb, 0.07f) + 0.6f * bump(tb - 0.22f, 0.07f);
+        Color cc1 = bossColor(D.core);
+        drawGlow(cc, 30 * (1 + 0.35f * hb) * (1 + 0.3f * ph), Color{ cc1.r, cc1.g, cc1.b, (unsigned char)std::min(255.0f, 120 + 110 * hb) });
+        drawGlow(cc, rc * (0.85f + 0.3f * hb), Color{ 255, 255, 255, (unsigned char)(50 + 110 * hb) });
+        for (int k = 0; k < 2; ++k) {                                   // heartbeat shockwaves
+            float u = (tb - k * 0.22f) / 0.65f;
+            if (u > 0 && u < 1)
+                DrawRing(cc, rc * (1.15f + 2.0f * u), rc * (1.15f + 2.0f * u) + 2.2f, 0, 360, 48,
+                         Color{ cc1.r, cc1.g, cc1.b, (unsigned char)((1 - u) * (k ? 70 : 120)) });
+        }
+        if (b.attack != A_SPIRAL && b.state != B_DYING) {               // containment field: counter-rotating arcs
+            float sp = time * (70 + 40 * ph);
+            for (int k = 0; k < 3; ++k) {
+                DrawRing(cc, rc * 1.32f, rc * 1.32f + 1.8f, sp + k * 120, sp + k * 120 + 55, 12, Color{ cc1.r, cc1.g, cc1.b, 150 });
+                DrawRing(cc, rc * 1.62f, rc * 1.62f + 1.2f, -sp * 0.7f + k * 120 + 40, -sp * 0.7f + k * 120 + 80, 10, Color{ cc1.r, cc1.g, cc1.b, 90 });
+            }
+        }
+        EndBlendMode();
+        {                                                               // plasma crackle arcing off the core
+            unsigned slot = (unsigned)(time / 0.07f);
+            int bolts = 1 + ph;
+            for (int k = 0; k < bolts; ++k) {
+                unsigned sd = slot * 2654435761u + k * 40503u + b.index * 977u;
+                if (((sd >> 13) % 100) > 55u + 15u * ph) continue;      // flickers on and off
+                float a = ((sd >> 4) % 360) * DEG2RAD;
+                Vector2 a0 = Vector2Add(cc, { cosf(a) * rc * 0.9f, sinf(a) * rc * 0.9f });
+                Vector2 a1 = Vector2Add(cc, { cosf(a + 0.5f) * rc * (1.9f + 0.4f * ph), sinf(a + 0.5f) * rc * (1.9f + 0.4f * ph) });
+                drawZap(a0, a1, sd, cc1, 1.1f, 200);
+            }
+        }
+        BeginBlendMode(BLEND_ADDITIVE);
+        // navigation strobes (port red / starboard green) and a white beacon on the keel
+        {
+            Vector2 tip = spr::bossNavTip(b.index);
+            float bt = fmodf(time + b.index * 0.21f, 1.4f);
+            float on = bump(bt - 0.05f, 0.05f) + bump(bt - 0.25f, 0.05f);
+            if (on > 0.02f && !D.organic)
+                for (int sg : { -1, 1 }) {
+                    Vector2 lp{ p.x + sg * tip.x * S / 2, p.y + tip.y * S / 2 };
+                    Color lc = sg < 0 ? Color{ 255, 60, 60, 255 } : Color{ 80, 255, 120, 255 };
+                    drawGlow(lp, 16 * on, Color{ lc.r, lc.g, lc.b, (unsigned char)(220 * std::min(1.0f, on)) });
+                }
+            float bw = fmodf(time + 0.7f, 2.1f);
+            float bon = bump(bw, 0.04f);
+            if (bon > 0.02f && !D.organic) drawGlow({ p.x, p.y + (D.muzzle.y - 0.3f) * S / 2 }, 22 * bon, Color{ 255, 255, 255, (unsigned char)(200 * bon) });
+        }
         if (b.attack == A_SPIRAL) {            // spinning sigil at the core while the spiral fires
             Vector2 cc{ p.x + D.coreP.x * S / 2, p.y + D.coreP.y * S / 2 };
             float sp = (b.index % 2 ? -1.f : 1.f) * time * 360;
@@ -2839,6 +2911,7 @@ int main(int argc, char** argv) {
         game.update(dt);
         if (game.quitRequested) break;
         game.draw();
+        if (selftest && getenv("SS_SEQ") && frame >= shotFrame - atoi(getenv("SS_SEQ"))) TakeScreenshot(TextFormat("seq%03d.png", frame));
         if (selftest && ++frame == shotFrame) { TakeScreenshot("selftest.png"); break; }
     }
 
