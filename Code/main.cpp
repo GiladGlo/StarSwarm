@@ -417,6 +417,8 @@ struct Game {
     float roll = 0, prevPX = W / 2.0f, prevVX = 0, muzzleT = 0, warpT = 0, exhaustT = 0;   // player ship FX
     bool  shield = false;                      // one-hit force field
     float shieldGrow = 1, shieldGrace = 0, shieldHitFlash = 0;
+    float shieldRegen = 0;                      // >0: seconds until a broken shield comes back by itself
+    static constexpr float SHIELD_REGEN_TIME = 15.0f;
     int   lives = 3, score = 0, hiScore = 0, stage = 0, nextLifeAt = 20000;
     int   shotsFired = 0, hits = 0;
     float time = 0, stageTimer = 0, bannerTimer = 0, diveTimer = 0, shake = 0;
@@ -475,7 +477,7 @@ struct Game {
 
     void raiseShield() {
         if (shield) return;
-        shield = true; shieldGrow = 0; shieldHitFlash = 0;
+        shield = true; shieldGrow = 0; shieldHitFlash = 0; shieldRegen = 0;
         PlaySound(sfx[SFX_SHIELD_UP]);
     }
 
@@ -1317,7 +1319,7 @@ struct Game {
 
     // Force field shatters: shards, flash, shockwave; brief grace period so one volley can't chain-kill
     void breakShield(Vector2 at) {
-        shield = false; shieldGrace = 0.6f; shake = 0.25f;
+        shield = false; shieldGrace = 0.6f; shake = 0.25f; shieldRegen = SHIELD_REGEN_TIME;
         Color cy{ 90, 210, 255, 255 }, wh{ 210, 245, 255, 255 };
         parts.push_back({ at, { 0, 0 }, 0.2f, 0.2f, 26, wh, FLASH });
         parts.push_back({ player, { 0, 0 }, 0.35f, 0.35f, SHIELD_RADIUS * 1.8f, cy, FLASH });
@@ -1573,6 +1575,7 @@ struct Game {
         }
         invuln = std::max(0.0f, invuln - dt);
         updateShipFx(dt);
+        if (!shield && shieldRegen > 0 && (shieldRegen -= dt) <= 0) raiseShield();   // auto-regeneration
         shieldGrace = std::max(0.0f, shieldGrace - dt);
         shieldHitFlash = std::max(0.0f, shieldHitFlash - dt);
         shieldGrow = std::min(1.0f, shieldGrow + dt * 2.2f);
@@ -1992,6 +1995,8 @@ struct Game {
         PlaySound(sfx[SFX_IMPACT]);
         for (auto& e : enemies)
             if (e.state != DEAD && e.state != WAITING && Vector2Distance(e.pos, at) < r + 14) hitEnemy(e, at);
+        for (size_t j = 0; j < eBullets.size();)              // the blast also clears missiles and rocks
+            if (shootable(eBullets[j].kind) && Vector2Distance(eBullets[j].pos, at) < r + shootableR(eBullets[j].kind)) destroyProjectile(j); else ++j;
         std::vector<int> mids;
         for (int j = 0; j < (int)meteors.size(); ++j) if (Vector2Distance(meteors[j].pos, at) < r + meteors[j].r() * 0.6f) mids.push_back(meteors[j].id);
         for (int id : mids) {
@@ -2031,6 +2036,12 @@ struct Game {
             for (float y = y0; y > 0; y -= 6) if (boss.hitTest({ x, y })) { bossY = y; break; }
         if (bossY > stop) { stop = bossY; firstBoss = true; firstE = nullptr; firstM = -1; }
         laserTop = pierce ? 0 : stop;
+        for (size_t j = 0; j < eBullets.size();) {            // the beam burns through missiles and rocks in its path
+            const Bullet& b = eBullets[j];
+            if (shootable(b.kind) && b.pos.y < y0 && b.pos.y > laserTop - shootableR(b.kind) && fabsf(b.pos.x - x) < w / 2 + shootableR(b.kind))
+                destroyProjectile(j);
+            else ++j;
+        }
         // sparks where it bites
         if (stop > 0 && GetRandomValue(0, 1)) { float life = frand(0.15f, 0.3f);
             parts.push_back({ { x + frand(-w, w), stop }, { frand(-140, 140), frand(-120, 40) }, life, life, frand(1, 2), WCOL[W_PULSE], SPARK }); }
@@ -2153,6 +2164,21 @@ struct Game {
         pendingSplits.clear();
     }
 
+    // Physical enemy projectiles that player weapons can destroy; energy shots are unaffected.
+    static bool shootable(int kind) { return kind == BK_MISSILE || kind == BK_C_HOMING || kind == BK_METEOR; }
+    static float shootableR(int kind) { return kind == BK_METEOR ? 11.f : 7.f; }
+    void destroyProjectile(size_t i) {
+        Bullet b = eBullets[i];
+        eBullets.erase(eBullets.begin() + i);
+        if (b.kind == BK_METEOR) {
+            explode(b.pos, Color{ 255, 150, 60, 255 }, Color{ 150, 130, 115, 255 }, 12, 180);
+            for (int q = 0; q < 6; ++q) { float ang = frand(0, 2 * PI), sp = frand(60, 160), life = frand(0.4f, 0.8f);
+                parts.push_back({ b.pos, { cosf(ang) * sp, sinf(ang) * sp }, life, life, frand(2, 3.5f), Color{ 130, 115, 100, 255 }, DEBRIS, frand(0, 360), frand(-600, 600) }); }
+        } else explode(b.pos, Color{ 255, 170, 70, 255 }, WHITE, 14, 200);
+        addScore(25);
+        PlaySound(sfx[SFX_IMPACT]);
+    }
+
     void collisions() {
         // Player projectiles vs enemies, rocks and the boss
         for (size_t i = 0; i < pBullets.size();) {
@@ -2179,6 +2205,14 @@ struct Game {
                     break;
                 }
             }
+            if (!used)
+                for (size_t j = 0; j < eBullets.size(); ++j)
+                    if (shootable(eBullets[j].kind) && CheckCollisionCircles(pb.pos, pr, eBullets[j].pos, shootableR(eBullets[j].kind))) {
+                        used = true; ++hits;
+                        impact(pb.pos);
+                        if (pb.kind == PB_ION) ionBlast(pb.pos, false); else destroyProjectile(j);
+                        break;
+                    }
             if (!used)
                 for (size_t j = 0; j < meteors.size(); ++j)
                     if (CheckCollisionCircles(pb.pos, pr - 1, meteors[j].pos, meteors[j].r() * 0.9f)) {
@@ -2835,6 +2869,11 @@ struct Game {
             DrawRectangleRounded({ x, y, bw, 6 }, 0.5f, 6, Color{ 50, 40, 30, 255 });
             if (f > 0) DrawRectangleRounded({ x, y, bw * f, 6 }, 0.5f, 6, Color{ 220, 150, 70, 255 });
         }
+        if (mode == PLAYING && playerAlive && !shield && shieldRegen > 0) {   // shield recharge bar under the label
+            float f = 1 - shieldRegen / SHIELD_REGEN_TIME, bw = 76, x = W / 2.0f - bw / 2, y = H - 9.0f;
+            DrawRectangleRounded({ x, y, bw, 3.5f }, 1, 6, Color{ 40, 30, 36, 220 });
+            DrawRectangleRounded({ x, y, std::max(3.5f, bw * f), 3.5f }, 1, 6, Color{ (unsigned char)(140 - 30 * f), (unsigned char)(90 + 120 * f), (unsigned char)(90 + 165 * f), 255 });
+        }
         if (mode == GAMEOVER) DrawRectangle(0, H / 2 - 120, W, 240, Color{ 0, 0, 0, 170 });
         if (mode == VICTORY)  DrawRectangle(0, H / 2 - 170, W, 330, Color{ 0, 0, 0, 150 });
     }
@@ -2892,7 +2931,7 @@ struct Game {
             text(TextFormat("/ %d", FINAL_STAGE), CB_X1 - 38, H - 41, 9, Color{ 150, 160, 190, 255 });
         }
         if (mode == PLAYING && playerAlive)
-            drawCentered(shield ? "SHIELD" : "SHIELD DOWN", H - 26, 16,
+            drawCentered(shield ? "SHIELD" : shieldRegen > 0 ? TextFormat("SHIELD  %d", (int)ceilf(shieldRegen)) : "SHIELD DOWN", H - 28, 16,
                  shield ? Color{ 110, 210, 255, 255 } : Color{ 140, 90, 90, 255 });
         text(TextFormat("%d", score), 20, 30, 22, RAYWHITE);
         drawCentered("HIGH SCORE", 10, 18, RED);

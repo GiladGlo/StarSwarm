@@ -37,7 +37,9 @@ The title rotates between **STAR SWARM**, **Developed by Gilad Globen** and **De
 
 **Your fighter:** a detailed ship (panelled wings with flaps, missile pods, ribbed cannons, engine intakes and petalled nozzles, framed canopy with a pilot) with live effects: it banks into turns, its twin engines burn with shock-diamond plumes and stream exhaust, side thrusters puff on sharp direction changes, red/green wingtip and white tail lights strobe, a glint sweeps across the canopy, the cannons flash when firing, and it warps in on every (re)spawn.
 
-**Shield:** a force field absorbs one hit (enemy fire or a ramming diver) and shatters. It regenerates when you respawn and at the start of each stage.
+**Shield:** a force field absorbs one hit (enemy fire or a ramming diver) and shatters. It recharges by itself 15 s after breaking (the label at the bottom counts down over a recharge bar), and is restored immediately when you respawn and at the start of each stage.
+
+**Shooting down projectiles:** your weapons destroy *physical* enemy projectiles: boss Seeker Missiles, Courier seekers and Meteor Storm rocks (25 pts each). The Pulse Laser beam burns through them and Ion Burst blasts clear them. *Energy* shots (enemy bolts, plasma orbs, tracers, spiral orbs, Nova Ring crystals, lasers and other Courier shots) can't be shot down — dodge them.
 
 ## Couriers & the arsenal
 
