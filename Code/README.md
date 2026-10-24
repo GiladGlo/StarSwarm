@@ -29,8 +29,8 @@ The title rotates between **STAR SWARM**, **Developed by Gilad Globen** and **De
 
 | Key | Action |
 |---|---|
-| ← → / A D | Move |
-| Space / ↑ | Fire (hold to keep firing; each weapon has its own on-screen limit) |
+| ← → ↑ ↓ / W A S D | Move (up/down within the lower part of the screen; the ship always stays fully on screen) |
+| Space | Fire (hold to keep firing; each weapon has its own on-screen limit) |
 | P | Pause |
 | Esc | Pause menu: **Resume game**, **End current game** (back to the title screen) or **Exit to desktop**. Pick with ↑/↓ + Enter, keys 1–3 or the mouse; Esc again resumes. On the title screen Esc quits |
 | F11 / Alt+Enter | Toggle fullscreen |

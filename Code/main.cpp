@@ -22,6 +22,10 @@
 static const int   W = 600;
 static const int   H = 800;
 static const float  SHIELD_RADIUS = 32.0f;       // force-field bubble radius
+// Player movement area: the ship (wingtips +-23, nose -25, plume below) always stays fully on screen.
+static const float  PLAYER_MARGIN_X = 34.0f;      // keep the whole ship and its shield bubble inside the sides
+static const float  PLAYER_Y_LOW    = 800 - 70.0f;   // lowest position (the original fixed row)
+static const float  PLAYER_Y_HIGH   = 800 - 330.0f;  // how far up the ship may fly (lower ~40% of the screen)
 static const size_t MAX_TORPEDOES = 5;          // projectiles allowed on screen at once
 static const char* HISCORE_FILE = "starswarm_highscore.txt";
 
@@ -407,7 +411,7 @@ struct Game {
     std::vector<Star>     stars;
     Sound sfx[SFX_COUNT];
 
-    Vector2 player{ W / 2.0f, H - 70.0f };
+    Vector2 player{ W / 2.0f, PLAYER_Y_LOW };
     bool  playerAlive = true;
     float respawnTimer = 0, invuln = 0, fireCooldown = 0;
     float roll = 0, prevPX = W / 2.0f, prevVX = 0, muzzleT = 0, warpT = 0, exhaustT = 0;   // player ship FX
@@ -448,7 +452,7 @@ struct Game {
 
     void newGame(int startStage = 1) {
         lives = 3; score = 0; stage = std::clamp(startStage, 1, FINAL_STAGE) - 1; nextLifeAt = 20000; shotsFired = hits = 0;
-        playerAlive = true; player = { W / 2.0f, H - 70.0f }; invuln = 0; roll = 0; prevPX = player.x; warpT = WARP_TIME;
+        playerAlive = true; player = { W / 2.0f, PLAYER_Y_LOW }; invuln = 0; roll = 0; prevPX = player.x; warpT = WARP_TIME;
         pBullets.clear(); eBullets.clear(); parts.clear(); rings.clear(); popups.clear(); meteors.clear(); meteorField = false;
         packages.clear(); zaps.clear(); weapon = W_PHOTON; wlevel = 0; heat = 0; overheated = false; weaponBag.clear(); lastOffered = -1;
         mode = PLAYING; shield = false; boss.active = false;
@@ -1562,7 +1566,7 @@ struct Game {
             bool divers = std::any_of(enemies.begin(), enemies.end(), [](const Enemy& e) { return e.state == DIVING; });
             if (respawnTimer <= 0 && lives <= 0) { mode = GAMEOVER; stageTimer = 0; saveHiScore(); }
             else if (respawnTimer <= 0 && !divers) {
-                playerAlive = true; invuln = 2.0f; player.x = W / 2.0f; prevPX = player.x; roll = 0; warpT = WARP_TIME;
+                playerAlive = true; invuln = 2.0f; player = { W / 2.0f, PLAYER_Y_LOW }; prevPX = player.x; roll = 0; warpT = WARP_TIME;
                 raiseShield();
             }
             return;
@@ -1572,10 +1576,13 @@ struct Game {
         shieldGrace = std::max(0.0f, shieldGrace - dt);
         shieldHitFlash = std::max(0.0f, shieldHitFlash - dt);
         shieldGrow = std::min(1.0f, shieldGrow + dt * 2.2f);
-        float mv = 0;
+        float mv = 0, mvy = 0;
         if (IsKeyDown(KEY_LEFT)  || IsKeyDown(KEY_A)) mv -= 1;
         if (IsKeyDown(KEY_RIGHT) || IsKeyDown(KEY_D)) mv += 1;
-        player.x = Clamp(player.x + mv * 340 * dt, 24, W - 24);
+        if (IsKeyDown(KEY_UP)    || IsKeyDown(KEY_W)) mvy -= 1;
+        if (IsKeyDown(KEY_DOWN)  || IsKeyDown(KEY_S)) mvy += 1;
+        player.x = Clamp(player.x + mv * 340 * dt, PLAYER_MARGIN_X, W - PLAYER_MARGIN_X);
+        player.y = Clamp(player.y + mvy * 300 * dt, PLAYER_Y_HIGH, PLAYER_Y_LOW);
 
         // debug runs: 1-5 pick a weapon, +/- change its level
         if (debugRun) {
@@ -1584,7 +1591,7 @@ struct Game {
             if (IsKeyPressed(KEY_MINUS) || IsKeyPressed(KEY_KP_SUBTRACT)) wlevel = std::max(0, wlevel - 1);
         }
         fireCooldown -= dt;
-        bool trigger = IsKeyDown(KEY_SPACE) || IsKeyDown(KEY_UP) || autoFire;   // hold to keep firing
+        bool trigger = IsKeyDown(KEY_SPACE) || autoFire;   // hold to keep firing
         laserOn = false;
         if (weapon == W_PULSE) {
             static const float rate[4] = { 0.5f, 0.42f, 0.36f, 0.3f };   // heat per second of firing (~2 s at Lv0)
@@ -2872,7 +2879,7 @@ struct Game {
             text(" 50 / 100", W / 2.0f - 60, 448, 22, YELLOW);
             text("formation / diving", W / 2.0f - 60, 490, 14, DARKGRAY);
             if (fmodf(time, 1.0f) < 0.6f) drawCentered("PRESS SPACE TO START", 570, 26, RAYWHITE);
-            drawCentered("ARROWS / A D  move    SPACE  fire    P / ESC  pause", 640, 16, GRAY);
+            drawCentered("ARROWS / WASD  move    SPACE  fire    P / ESC  pause", 640, 16, GRAY);
             drawCentered("F11 / ALT+ENTER  fullscreen", 664, 16, GRAY);
             drawCentered(TextFormat("HIGH SCORE  %d", hiScore), 710, 22, GOLD);
             drawCentered("CTRL+L  debug stage select", 760, 12, Color{ 90, 90, 110, 255 });
