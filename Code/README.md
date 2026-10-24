@@ -54,7 +54,7 @@ While you have the un-upgraded Photon Torpedo, half the packages are new weapons
 
 | Weapon | Behaviour | Limit (Lv0 → Lv3) |
 |---|---|---|
-| Photon Torpedo | the default; Lv2 fires 2, Lv3 fires 3 per volley | 5 → 7 volleys on screen |
+| Photon Torpedo | the default; Lv2 fires 2, Lv3 fires 3 per volley | 3 → 5 volleys on screen |
 | Spread Cannon | fan of pellets, wider and denser with level | 3 → 7 pellets, 2 → 3 volleys |
 | Pulse Laser | continuous beam while held; builds heat and overheats (cool-down until the gauge drops). Lv3 pierces | beam width 4.5 → 11 |
 | Homing Swarm | mini-missiles that steer to the nearest enemy; in meteor fields each one locks onto the closest rock ahead of your ship (or flies straight if there is none) | 2 → 4 per shot, 6 → 10 on screen |

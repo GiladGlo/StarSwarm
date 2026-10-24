@@ -1998,7 +1998,7 @@ struct Game {
         Vector2 m{ player.x, player.y - 26 };
         switch (weapon) {
             case W_PHOTON: {
-                static const int volleys[4] = { 5, 6, 6, 7 };
+                static const int volleys[4] = { 3, 4, 4, 5 };   // torpedoes (or pairs/triples) on screen per level
                 int per = wlevel >= 3 ? 3 : (wlevel >= 2 ? 2 : 1);
                 if (countPB(PB_PHOTON) + per > volleys[wlevel] * per) return;
                 for (int i = 0; i < per; ++i) { float off = (i - (per - 1) / 2.0f) * 16;
