@@ -944,7 +944,7 @@ struct Game {
                         eBullets.back().aux = (float)k / arms + b.attackT * 0.25f;   // colour shifts along each arm
                     }
                     muzzleFlash(b.core(), coreColor(), 14, false);
-                    b.fireT = 0.085f / std::sqrt(ag);
+                    b.fireT = 0.094f / std::sqrt(ag);              // ~10% fewer orbs along each arm
                 }
                 if (b.attackT > 2.4f) b.attack = A_NONE;
                 break;
@@ -952,7 +952,7 @@ struct Game {
             case A_RING: {                 // expanding rings in every direction
                 int rings_ = 2 + b.phase();
                 if (b.fireT <= 0 && b.step < rings_) {
-                    int n = 16 + 2 * b.index;
+                    int n = (int)lroundf((16 + 2 * b.index) * 0.9f);   // ~10% fewer crystals per ring
                     float off = b.step * 180.0f / n;
                     for (int i = 0; i < n; ++i) bossShoot(b.core(), off + i * 360.0f / n, 160 * diff, BK_CRYSTAL);
                     rings.push_back({ b.core(), 1.6f, 1.6f, 160 * diff * 1.6f, coreColor(150) });   // shockwave travels with the ring
