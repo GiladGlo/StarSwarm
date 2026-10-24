@@ -48,7 +48,7 @@ From stage 2, every alien wave has one **Courier** in its formation: an armoured
 | Package | Effect |
 |---|---|
 | New weapon (coloured icon) | Switch to that weapon class, keeping your upgrade level |
-| Upgrade (gold chevrons) | +1 level, up to Lv3; at Lv3 it's worth 1,000 points |
+| Upgrade (gold chevrons) | +1 level, up to Lv3; at Lv3 it's worth 1,000 points **and summons a wingman drone** |
 
 While you have the un-upgraded Photon Torpedo, half the packages are new weapons; once you hold another weapon or an upgraded Photon, 80 % are upgrades. New-weapon drops come from a shuffle bag, so you see each of the other weapon classes once before any repeats.
 
@@ -59,6 +59,8 @@ While you have the un-upgraded Photon Torpedo, half the packages are new weapons
 | Pulse Laser | continuous beam while held; builds heat and overheats (cool-down until the gauge drops). Lv3 pierces | beam width 4.5 → 11 |
 | Homing Swarm | mini-missiles that steer to the nearest enemy; in meteor fields each one locks onto the closest rock ahead of your ship (or flies straight if there is none) | 2 → 4 per shot, 6 → 10 on screen |
 | Ion Burst | slow orb that explodes in an area; Lv3 chains lightning to 3 more enemies | 2 → 3 orbs on screen |
+
+**Wingman drone:** catching an upgrade when you're already at Lv3 also brings a small escort drone for 30 s (another one refreshes the timer). It flies on an arc around your ship (left, over the top, right; never below or on it), drifting naturally and dodging incoming enemy shots at up to 75% more than your ship's speed, and fires one basic homing missile at a time (its missiles don't count against your weapon's limit). One enemy hit destroys it; it's also lost if you lose a life, and it doesn't follow you through a hyperspace jump. A green timer next to the weapon indicator counts down; the drone blinks in its last 5 s.
 
 **Losing a life** costs one upgrade level (at Lv0 you drop back to the Photon Torpedo). Your weapon and level carry over between stages, bosses included. The compact indicator next to your spare ships shows the current weapon, its level (dots) and the laser heat gauge.
 

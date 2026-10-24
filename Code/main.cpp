@@ -66,6 +66,7 @@ struct Gfx {
     static constexpr int BOSS_N = 512;
     Texture2D meteor[7]{};                             // 3D tumble atlases (m3d); [6] = volatile rock
     Texture2D courier[2]{};                            // [1] = armour blown off
+    Texture2D drone{};                                 // wingman drone
     Texture2D planet[10]{};                            // one backdrop body per boss cycle
     bool planetLoaded[10]{};
     Texture2D bossTex[10]{};
@@ -87,6 +88,7 @@ struct Gfx {
             UnloadTexture(flat);
         }
         courier[0] = spr::courier(N, false); courier[1] = spr::courier(N, true);
+        drone = spr::wingDrone(N);
         glow = spr::glow(64);
         nebula = spr::nebula(300, 400);
     }
@@ -134,7 +136,7 @@ struct Gfx {
             UnloadTexture(*t);
         for (int i = 0; i < 10; ++i) if (bossLoaded[i]) UnloadTexture(bossTex[i]);
         for (auto& m : meteor) UnloadTexture(m);
-        for (Texture2D* t : { &courier[0], &courier[1] }) UnloadTexture(*t);
+        for (Texture2D* t : { &courier[0], &courier[1], &drone }) UnloadTexture(*t);
         for (int i = 0; i < 10; ++i) if (planetLoaded[i]) UnloadTexture(planet[i]);
     }
 };
@@ -342,7 +344,7 @@ struct Enemy {
 enum BKind { BK_ENEMY = 0, BK_ORB = 1, BK_MISSILE = 2, BK_METEOR = 3, BK_BOLT = 4, BK_SPIRAL = 5, BK_CRYSTAL = 6,
              BK_C_SPREAD = 7, BK_C_PULSE = 8, BK_C_HOMING = 9, BK_C_ION = 10, BK_C_PHOTON = 11 };   // 7+: Courier shots
 
-enum PBKind { PB_PHOTON = 0, PB_SPREAD = 1, PB_HOMING = 3, PB_ION = 4 };   // player projectile kinds
+enum PBKind { PB_PHOTON = 0, PB_SPREAD = 1, PB_HOMING = 3, PB_ION = 4, PB_DRONE = 5 };   // PB_DRONE: wingman's basic homing missile   // player projectile kinds
 struct Package   { Vector2 pos; int content; float t; };   // content: W_SPREAD..W_ION, or -1 = upgrade
 struct Lightning { Vector2 a, b; float life; unsigned seed; };
 struct Bullet   { Vector2 pos, vel; int kind = 0; float age = 0; float aux = 0; };   // aux: hue (spiral) / rock variant (meteor)
@@ -474,6 +476,11 @@ struct Game {
     bool  debugRun = false;                  // started from the Ctrl+L stage select: high score is not recorded
     bool  stageDialog = false;               // Ctrl+L debug stage-select dialog
     std::string dlgText = "1";
+    // Wingman drone (earned by catching an upgrade at Lv3): 30 s escort with basic homing missiles
+    bool  droneOn = false;
+    float droneT = 0, droneFireT = 0, droneWarp = 0, droneBank = 0;
+    Vector2 droneOff{ -50, 0 }, droneVel{ 0, 0 }, droneTarget{ -50, 0 };
+    static constexpr float DRONE_TIME = 30.0f, DRONE_SPEED = 340 * 1.75f;
     float hyperT = -1;                          // >=0: hyperspace jump in progress (seconds since it began)
     bool  hyperSwitched = false;                // next stage already started during the jump
     Vector2 hyperStart{};
@@ -506,7 +513,7 @@ struct Game {
         lives = 3; score = 0; stage = std::clamp(startStage, 1, FINAL_STAGE) - 1; nextLifeAt = 20000; shotsFired = hits = 0;
         playerAlive = true; player = { W / 2.0f, PLAYER_Y_LOW }; invuln = 0; roll = 0; prevPX = player.x; warpT = WARP_TIME;
         pBullets.clear(); eBullets.clear(); parts.clear(); rings.clear(); popups.clear(); meteors.clear(); meteorField = false;
-        hyperT = -1;
+        hyperT = -1; droneOn = false;
         packages.clear(); zaps.clear(); weapon = W_PHOTON; wlevel = 0; heat = 0; overheated = false; weaponBag.clear(); lastOffered = -1;
         mode = PLAYING; shield = false; boss.active = false;
         nextStage();
@@ -1320,6 +1327,11 @@ struct Game {
 
     void startHyper() {
         hyperT = 0; hyperSwitched = false; hyperStart = player;
+        if (droneOn) {                                   // the drone does not make the jump: it warps away
+            Vector2 d = Vector2Add(player, droneOff);
+            parts.push_back({ d, { 0, 0 }, 0.35f, 0.35f, 30, Color{ 140, 255, 170, 255 }, FLASH });
+            droneOn = false;
+        }
         eBullets.clear(); pBullets.clear(); warnings.clear();
         hstars.clear();
         for (int i = 0; i < 420; ++i) hstars.push_back({ frand(-900, 900), frand(-1100, 1100), frand(-250, 4000) });
@@ -1508,6 +1520,7 @@ struct Game {
 
     void killPlayer() {
         shield = false;
+        if (droneOn) destroyDrone();
         // losing a life costs one upgrade level; with none left you drop back to the basic Photon Torpedo
         if (wlevel > 0) --wlevel; else weapon = W_PHOTON;
         heat = 0; overheated = false; laserOn = false;
@@ -1715,6 +1728,7 @@ struct Game {
         if (hyperT >= 0) { updateHyper(dt); if (!hyperSwitched) return; }
 
         updatePlayer(dt);
+        updateDrone(dt);
         updateEnemies(dt);
         updateBoss(dt);
         updateMeteors(dt);
@@ -1885,7 +1899,7 @@ struct Game {
     void updateBullets(float dt) {
         for (auto& b : pBullets) {
             b.age += dt;
-            if (b.kind == PB_HOMING) {          // steer toward the nearest target
+            if (b.kind == PB_HOMING || b.kind == PB_DRONE) {   // steer toward the nearest target
                 static const float turnR[4] = { 3.5f, 5.0f, 5.0f, 6.0f };
                 Vector2 tgt{ -1, -1 }; float best = 1e9f;
                 if (stageKind(stage) == SK_METEORS && !boss.active) {
@@ -1915,7 +1929,7 @@ struct Game {
                 float cur = atan2f(b.vel.y, b.vel.x);
                 if (tgt.x >= 0 || tgt.y < -100) {
                     float want = atan2f(tgt.y - b.pos.y, tgt.x - b.pos.x);
-                    float d = fmodf(want - cur + 3 * PI, 2 * PI) - PI, turn = turnR[wlevel] * dt;
+                    float d = fmodf(want - cur + 3 * PI, 2 * PI) - PI, turn = turnR[b.kind == PB_DRONE ? 0 : wlevel] * dt;
                     cur += std::clamp(d, -turn, turn);
                 }
                 float sp = std::min(560.0f, Vector2Length(b.vel) + 500 * dt);
@@ -2013,6 +2027,104 @@ struct Game {
     int countPB(int kind) const { int n = 0; for (auto& b : pBullets) if (b.kind == kind) ++n; return n; }
 
     // Fire one volley of the current (non-laser) weapon; each class has its own on-screen limit
+    // ======================================================== WINGMAN DRONE ==
+    void activateDrone() {
+        droneT = DRONE_TIME;
+        if (droneOn) return;                             // already flying: just refresh the timer
+        droneOn = true; droneWarp = 0.6f; droneFireT = 0.8f; droneBank = 0;
+        droneOff = droneTarget = { -50, 0 }; droneVel = { 0, 0 };
+        PlaySound(sfx[SFX_SHIELD_UP]);
+    }
+    void destroyDrone() {
+        Vector2 d = Vector2Add(player, droneOff);
+        explode(d, Color{ 140, 255, 170, 255 }, Color{ 220, 230, 245, 255 }, 26, 240);
+        for (int i = 0; i < 10; ++i) { float a = frand(0, 2 * PI), sp = frand(80, 220), life = frand(0.4f, 0.8f);
+            parts.push_back({ d, { cosf(a) * sp, sinf(a) * sp }, life, life, frand(2, 3.5f), Color{ 200, 210, 225, 255 }, DEBRIS, frand(0, 360), frand(-800, 800) }); }
+        PlaySound(sfx[SFX_BOOM]);
+        droneOn = false;
+    }
+    // The drone flies on an arc around the ship (left -> over the top -> right, never below or on it, 42..90 units out).
+    // Its preferred spot drifts along the left/top arc; when enemy shots threaten it, it moves to the safest spot.
+    // Motion is acceleration-limited with a top speed 75% above the ship's. One enemy hit destroys it.
+    void updateDrone(float dt) {
+        if (!droneOn || !playerAlive) return;
+        droneWarp = std::max(0.0f, droneWarp - dt);
+        if ((droneT -= dt) <= 0) {                       // time's up: warp away
+            parts.push_back({ Vector2Add(player, droneOff), { 0, 0 }, 0.35f, 0.35f, 30, Color{ 140, 255, 170, 255 }, FLASH });
+            droneOn = false; return;
+        }
+        auto dangerAt = [&](Vector2 c) {
+            Vector2 w = Vector2Add(player, c); float dg = 0;
+            for (const auto& b : eBullets) {
+                Vector2 v = Vector2Subtract(b.pos, w);
+                if (v.x * v.x + v.y * v.y > 260 * 260) continue;
+                for (float tt = 0; tt <= 0.5f; tt += 0.1f) {
+                    float d = Vector2Distance(Vector2Add(b.pos, Vector2Scale(b.vel, tt)), w);
+                    if (d < 26) dg += (1 - d / 26) * (1 - tt);
+                }
+            }
+            return dg; };
+        auto onScreen = [&](Vector2 c) { float x = player.x + c.x, y = player.y + c.y; return x > 16 && x < W - 16 && y > 60; };
+        float ha = (205 + 40 * sinf(time * 0.7f)) * DEG2RAD, hr = 58 + 12 * sinf(time * 1.1f);
+        Vector2 home{ cosf(ha) * hr, sinf(ha) * hr * 0.75f };
+        if (!onScreen(home)) home.x = -home.x;           // near the left edge the idle spot mirrors to the right
+        Vector2 best = home; float bestS = dangerAt(home) * 100;
+        for (int ri = 0; ri < 4; ++ri) for (int ai = 0; ai <= 12; ++ai) {
+            float r = 42 + ri * 16.0f, a = (180 + ai * 15) * DEG2RAD;
+            Vector2 c{ cosf(a) * r, sinf(a) * r * 0.75f };
+            if (!onScreen(c)) continue;
+            float sc = dangerAt(c) * 100 + Vector2Distance(c, home) / 50 + Vector2Distance(c, droneOff) / 90;
+            if (sc < bestS - 0.6f) { bestS = sc; best = c; }   // hysteresis: only change plan for a clearly better spot
+        }
+        droneTarget = best;
+        Vector2 want = Vector2Subtract(droneTarget, droneOff); float dist = Vector2Length(want);
+        Vector2 desired = dist > 1 ? Vector2Scale(want, std::min(DRONE_SPEED, dist * 6) / dist) : Vector2{ 0, 0 };
+        Vector2 dv = Vector2Subtract(desired, droneVel); float dl = Vector2Length(dv), acc = 3000 * dt;
+        if (dl > acc) dv = Vector2Scale(dv, acc / dl);
+        droneVel = Vector2Add(droneVel, dv);
+        droneOff = Vector2Add(droneOff, Vector2Scale(droneVel, dt));
+        if (droneOff.y > 6) droneOff.y = 6;                                   // never below the ship
+        float L = Vector2Length(droneOff);
+        if (L < 40) droneOff = Vector2Scale(Vector2Normalize(droneOff), 40);  // never on top of it
+        if (L > 95) droneOff = Vector2Scale(Vector2Normalize(droneOff), 95);
+        droneOff.x = Clamp(droneOff.x, 16 - player.x, W - 16 - player.x);    // stay on screen
+        droneBank += (Clamp(droneVel.x / DRONE_SPEED, -1, 1) * 16 - droneBank) * std::min(1.0f, dt * 8);
+        Vector2 dpos = Vector2Add(player, droneOff);
+        // fire: one basic homing missile at a time
+        bool targets = boss.active || !meteors.empty() ||
+                       std::any_of(enemies.begin(), enemies.end(), [](const Enemy& e) { return e.state != DEAD && e.state != WAITING; });
+        if ((droneFireT -= dt) <= 0 && targets && droneWarp <= 0) {
+            droneFireT = 0.42f;
+            pBullets.push_back({ { dpos.x, dpos.y - 10 }, { frand(-40, 40), -300 }, PB_DRONE });
+        }
+        // one hit destroys it
+        for (size_t i = 0; i < eBullets.size(); ++i)
+            if (Vector2Distance(eBullets[i].pos, dpos) < 10) { eBullets.erase(eBullets.begin() + i); destroyDrone(); return; }
+    }
+    void drawDrone() {
+        if (!droneOn || !playerAlive) return;
+        Vector2 d = Vector2Add(player, droneOff);
+        float w = droneWarp > 0 ? 1 - droneWarp / 0.6f : 1;
+        if (droneWarp > 0) {                              // green warp-in streaks
+            BeginBlendMode(BLEND_ADDITIVE);
+            for (int k = 0; k < 10; ++k) { float a = k * 0.628f, r0 = (1 - w) * 60 + 5;
+                DrawLineEx({ d.x + cosf(a) * r0, d.y + sinf(a) * r0 * 0.6f }, { d.x + cosf(a) * (r0 + 10), d.y + sinf(a) * (r0 + 10) * 0.6f }, 1.2f, Color{ 140, 255, 170, (unsigned char)(220 * w) }); }
+            drawGlow(d, 20 * w, Color{ 140, 255, 170, (unsigned char)(150 * w) });
+            EndBlendMode();
+        }
+        float fa = droneWarp > 0 ? std::max(0.0f, (w - 0.6f) / 0.4f) : 1;
+        if (droneT < 5 && fmodf(time, 0.25f) < 0.1f) fa *= 0.25f;          // blinks in its last 5 s
+        if (fa <= 0) return;
+        BeginBlendMode(BLEND_ADDITIVE);
+        Vector2 n{ d.x, d.y + 15 };
+        float fl = 0.85f + 0.15f * sinf(time * 47);
+        DrawTriangle({ n.x - 2, n.y }, { n.x, n.y + (12 + 6 * Clamp(-droneVel.y / DRONE_SPEED, 0, 1)) * fl }, { n.x + 2, n.y }, Color{ 60, 130, 255, (unsigned char)(170 * fa) });
+        drawGlow({ n.x, n.y + 2 }, 6 * fl, Color{ 90, 160, 255, (unsigned char)(170 * fa) });
+        if (fmodf(time, 1.0f) < 0.08f) drawGlow({ d.x - 12, d.y - 2 }, 5, Color{ 110, 255, 120, (unsigned char)(230 * fa) });
+        EndBlendMode();
+        drawShip(gfx.drone, d, 30, droneBank, true, Color{ 255, 255, 255, (unsigned char)(255 * fa) });
+    }
+
     static constexpr float WARP_TIME = 0.8f;
     // Banking, side-thruster puffs, exhaust particles and timers for the player's ship.
     // Velocity comes from the position change, so it works however the ship was moved.
@@ -2243,7 +2355,7 @@ struct Game {
         std::string label;
         if (pk.content < 0 || pk.content == weapon) {
             if (wlevel < 3) { ++wlevel; label = TextFormat("UPGRADE +1   LV%d", wlevel); }
-            else { addScore(1000); label = "MAX LEVEL  +1000"; }
+            else { addScore(1000); label = droneOn ? "MAX LEVEL +1000  DRONE 30s" : "MAX LEVEL +1000  WINGMAN DRONE"; activateDrone(); }
         } else {
             weapon = pk.content; heat = 0; overheated = false;   // keeps the current upgrade level
             label = WNAME[weapon];
@@ -2282,6 +2394,14 @@ struct Game {
         for (int i = 0; i < 3; i++) {
             Vector2 c{ o.x + 30 + i * 11.0f, o.y + (laser ? 9.0f : 12.0f) };
             if (i < wlevel) DrawCircleV(c, 3.4f, col); else DrawCircleLines((int)c.x, (int)c.y, 3.4f, Color{ col.r, col.g, col.b, 150 });
+        }
+        if (droneOn && playerAlive) {                    // wingman drone timer
+            float dx = o.x + 70, f = droneT / DRONE_TIME;
+            Color dc{ 140, 255, 170, 255 };
+            DrawRectangleRounded({ dx, o.y, 56, 24 }, 0.35f, 6, Color{ 10, 28, 16, 200 });
+            DrawRectangleRoundedLinesEx({ dx, o.y, 56, 24 }, 0.35f, 6, 1.0f, Color{ dc.r, dc.g, dc.b, 170 });
+            DrawRectangle((int)dx + 6, (int)o.y + 17, 44, 3, Color{ 30, 50, 36, 255 });
+            DrawRectangle((int)dx + 6, (int)o.y + 17, (int)(44 * f), 3, droneT < 5 && fmodf(time, 0.3f) < 0.15f ? Color{ 255, 220, 120, 255 } : dc);
         }
         if (laser) {
             Color hc = overheated ? (fmodf(time, 0.3f) < 0.15f ? Color{ 255, 90, 60, 255 } : Color{ 120, 40, 30, 255 }) : (heat > 0.8f ? Color{ 255, 150, 60, 255 } : col);
@@ -2356,7 +2476,7 @@ struct Game {
         for (size_t i = 0; i < pBullets.size();) {
             bool used = false;
             Bullet pb = pBullets[i];
-            float pr = pb.kind == PB_ION ? 9.f : pb.kind == PB_SPREAD ? 5.f : pb.kind == PB_HOMING ? 6.f : 7.f;
+            float pr = pb.kind == PB_ION ? 9.f : pb.kind == PB_SPREAD ? 5.f : (pb.kind == PB_HOMING || pb.kind == PB_DRONE) ? 6.f : 7.f;
             auto impact = [&](Vector2 at) {
                 if (pb.kind == PB_PHOTON) torpedoImpact(at);
                 else if (pb.kind != PB_ION) {
@@ -2789,6 +2909,7 @@ struct Game {
         if ((mode == PLAYING || mode == VICTORY) && playerAlive && !(hyperT >= 0 && !hyperSwitched)) {
             bool blink = invuln > 0 && fmodf(time, 0.2f) < 0.1f;
             if (!blink) drawPlayerShip();
+            drawDrone();
             if (shield) drawShield();
         }
 
@@ -2819,7 +2940,7 @@ struct Game {
                 for (int k = 1; k <= 3; ++k) drawGlow(Vector2Subtract(b.pos, Vector2Scale(dv, k * 7.0f)), 9 - k * 2.0f, Color{ 255, 140, 40, (unsigned char)(170 - k * 40) });
                 DrawLineEx(Vector2Subtract(b.pos, Vector2Scale(dv, 8)), Vector2Add(b.pos, Vector2Scale(dv, 6)), 5, Color{ 255, 220, 120, 255 });
                 DrawLineEx(Vector2Subtract(b.pos, Vector2Scale(dv, 5)), Vector2Add(b.pos, Vector2Scale(dv, 5)), 2.2f, WHITE);
-            } else if (b.kind == PB_HOMING) {  // homing missile (body drawn here; trail from particles)
+            } else if (b.kind == PB_HOMING || b.kind == PB_DRONE) {  // homing missile (body drawn here; trail from particles)
                 drawGlow(Vector2Subtract(b.pos, Vector2Scale(dv, 7)), 12, Color{ 160, 255, 140, 230 });
                 float ang = atan2f(dv.y, dv.x) * RAD2DEG;
                 DrawRectanglePro({ b.pos.x, b.pos.y, 15, 4.5f }, { 7.5f, 2.25f }, ang, Color{ 215, 245, 215, 255 });
@@ -3106,6 +3227,11 @@ struct Game {
         }
 
         text("1UP", 20, 10, 18, RED);
+        if (droneOn && playerAlive && (mode == PLAYING || mode == VICTORY)) {   // drone timer label
+            int n = std::max(0, lives - 1);
+            float dx = (n > 0 ? 41 + (n - 1) * 34 + 8.0f : 12) + 70;
+            text(TextFormat("DRONE %d", (int)ceilf(droneT)), dx + 6, H - 32, 10, Color{ 170, 255, 190, 255 });
+        }
         if (mode == PLAYING || mode == VICTORY || mode == GAMEOVER) {   // campaign bar labels
             text(TextFormat("STAGE %d", mode == VICTORY ? FINAL_STAGE : stage), CB_X0, H - 44, 12, RAYWHITE);
             text(TextFormat("/ %d", FINAL_STAGE), CB_X1 - 38, H - 41, 9, Color{ 150, 160, 190, 255 });

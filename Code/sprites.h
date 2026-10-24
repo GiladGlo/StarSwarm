@@ -1076,4 +1076,46 @@ inline Texture2D nebula(int Wd, int Ht) {
     return t;
 }
 
+// Wingman drone: compact white/blue escort with homing-missile pods and one engine. Faces UP.
+inline Texture2D wingDrone(int N) {
+    Vector3 hull = rgb(222, 228, 238), blue = rgb(40, 100, 220), dark = rgb(50, 56, 70), green = rgb(110, 255, 120);
+    std::vector<Part> P;
+    // stubby forward-swept wings
+    P.push_back({ [](Vector2 p) { Vector2 q = M(p); return sdPoly(q, { { 0.1f, 0.05f }, { 0.72f, -0.18f }, { 0.78f, 0.04f }, { 0.62f, 0.3f }, { 0.1f, 0.42f } }) - 0.03f; },
+                  hull, 0.1f, 0.12f, 0.08f, 0.55f, 0.65f, 0, 1,
+                  [=](Vector2 p, float d, Vector3& c, float& h, float& e) {
+                      Vector2 q = M(p);
+                      if (q.x > 0.5f) c = blue;
+                      if (fabsf(q.x - 0.36f) < 0.008f || fabsf(q.y - 0.2f) < 0.007f) { c = Vector3Scale(c, 0.55f); h -= 0.015f; }
+                      if (q.x > 0.62f && q.y < 0.0f) { c = green; e = 0.9f; }                 // wingtip lights
+                      if (d > -0.02f) c = Vector3Scale(c, 0.8f);
+                  } });
+    // missile pods under each wing: two green-tipped missiles each
+    for (int sgn : { -1, 1 }) for (float off : { -0.05f, 0.05f })
+        P.push_back({ [=](Vector2 p) { return sdCapsule(p, { sgn * (0.42f + off), -0.32f }, { sgn * (0.42f + off), 0.16f }, 0.035f, 0.04f); },
+                      hull, 0.22f, 0.08f, 0.04f, 0.6f, 0.8f, 0, 1,
+                      [=](Vector2 p, float, Vector3& c, float& h, float& e) {
+                          if (p.y < -0.22f) { c = green; e = 0.6f; }
+                          else if (p.y > 0.08f) c = dark;
+                          else if (fabsf(p.y + 0.05f) < 0.012f) { c = Vector3Scale(green, 0.6f); h -= 0.005f; }
+                      } });
+    // fuselage pod with a sensor dome
+    P.push_back({ [](Vector2 p) { return sdCapsule(p, { 0, -0.62f }, { 0, 0.5f }, 0.1f, 0.18f); },
+                  hull, 0.3f, 0.3f, 0.15f, 0.5f, 0.85f, 0, 1,
+                  [=](Vector2 p, float d, Vector3& c, float& h, float& e) {
+                      if (fabsf(p.x) < 0.025f && p.y > -0.1f && p.y < 0.45f) c = blue;
+                      for (float ly : { -0.2f, 0.25f }) if (fabsf(p.y - ly) < 0.008f) { c = Vector3Scale(c, 0.5f); h -= 0.02f; }
+                      if (p.y < -0.5f) c = blue;
+                      c = Vector3Scale(c, 0.94f + 0.08f * fbm({ p.x * 16, p.y * 16 }, 3));
+                      (void)d; (void)e;
+                  } });
+    P.push_back({ [](Vector2 p) { return sdCircle(p, { 0, -0.18f }, 0.085f); }, rgb(60, 200, 255), 0.55f, 0.1f, 0.06f, 0.2f, 1.0f, 0.5f, 1,
+                  [](Vector2 p, float d, Vector3& c, float&, float& e) { float r = Vector2Distance(p, { 0, -0.18f }) / 0.085f;
+                      c = mix(rgb(220, 250, 255), rgb(30, 140, 230), r); e = 0.4f + 0.8f * (1 - r); if (d > -0.015f) { c = rgb(50, 56, 70); e = 0; } } });
+    // engine nozzle
+    P.push_back({ [](Vector2 p) { return sdEllipse(p, { 0, 0.55f }, { 0.12f, 0.06f }); }, rgb(120, 200, 255), 0.25f, 0.05f, 0.04f, 0, 0.3f, 1.4f });
+    return render(N, P, { 0.45f, 0.65f, 1.f }, nullptr, true);
+}
+
+
 } // namespace spr
