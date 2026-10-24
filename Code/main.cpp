@@ -7,6 +7,7 @@
 #include "raylib.h"
 #include "raymath.h"
 #include "sprites.h"
+#include "meteor3d.h"
 
 #include <vector>
 #include <string>
@@ -50,7 +51,7 @@ static std::vector<Vector2> buildPath(const std::vector<Vector2>& ctrl) {
 struct Gfx {
     Texture2D player{}, bee[2]{}, fly[2]{}, boss[2]{}, bossDmg[2]{}, glow{}, nebula{};
     static constexpr int BOSS_N = 384;
-    Texture2D meteor[7]{};                             // [6] = volatile (explosive) rock
+    Texture2D meteor[7]{};                             // 3D tumble atlases (m3d); [6] = volatile rock
     Texture2D dart{}, shielded[2]{}, splitter[2]{};    // later-wave enemy types
     Texture2D courier[2]{};                            // [1] = armour blown off
     Texture2D planet[10]{};                            // one backdrop body per boss cycle
@@ -72,7 +73,11 @@ struct Gfx {
             boss[f] = spr::boss(N, f, false);
             bossDmg[f] = spr::boss(N, f, true);
         }
-        for (int i = 0; i < 7; ++i) meteor[i] = spr::meteor(192, i);
+        for (int i = 0; i < 7; ++i) {   // 64-frame 3D tumble atlases (GPU-rendered); old sprite = fallback
+            Texture2D flat = spr::meteor(192, i);
+            meteor[i] = m3d::atlas(i, &flat);
+            UnloadTexture(flat);
+        }
         dart = spr::dart(N);
         courier[0] = spr::courier(N, false); courier[1] = spr::courier(N, true);
         for (int f = 0; f < 2; ++f) { shielded[f] = spr::shieldedBug(N, f); splitter[f] = spr::splitter(N, f); }
@@ -705,21 +710,22 @@ struct Game {
                 drawGlow(m.pos, m.r() * 1.15f, Color{ 255, 150, 90, (unsigned char)(25 + 20 * pl) });
                 EndBlendMode();
             }
-            drawShip(gfx.meteor[m.variant], m.pos, S, m.rot, true);
+            S *= 1.08f;
+            float tilt = (float)((m.id * 53) % 40 - 20);   // fixed per-rock orientation; the tumble is in the atlas
+            const Texture2D& tex = gfx.meteor[m.variant];
+            m3d::draw(tex, m.rot, { m.pos.x + S * 0.12f, m.pos.y + S * 0.18f }, S * 0.95f, tilt, Color{ 0, 0, 0, 110 }, false);   // shadow
+            m3d::draw(tex, m.rot, m.pos, S, tilt);
             if (m.volatileRock()) {
                 float pl = 0.5f + 0.5f * sinf(time * 3.5f + m.id);
                 bool armed = m.fuse > 0;
                 BeginBlendMode(BLEND_ADDITIVE);
-                const Texture2D& t = gfx.meteor[m.variant];
                 Color tint = armed && fmodf(time, 0.06f) < 0.03f ? Color{ 255, 255, 255, 230 } : Color{ 255, 140, 90, (unsigned char)(18 + 22 * pl) };
-                DrawTexturePro(t, { 0, 0, (float)t.width, (float)t.height }, { m.pos.x, m.pos.y, S, S }, { S / 2, S / 2 }, m.rot, tint);
+                m3d::draw(tex, m.rot, m.pos, S, tilt, tint, false);
                 EndBlendMode();
             }
             if (m.flash > 0) {
                 BeginBlendMode(BLEND_ADDITIVE);
-                const Texture2D& t = gfx.meteor[m.variant];
-                DrawTexturePro(t, { 0, 0, (float)t.width, (float)t.height }, { m.pos.x, m.pos.y, S, S }, { S / 2, S / 2 }, m.rot,
-                               Color{ 255, 220, 180, (unsigned char)(200 * m.flash / 0.12f) });
+                m3d::draw(tex, m.rot, m.pos, S, tilt, Color{ 255, 220, 180, (unsigned char)(200 * m.flash / 0.12f) }, false);
                 EndBlendMode();
             }
         }
@@ -2542,7 +2548,7 @@ struct Game {
                 DrawCircleV(Vector2Add(b.pos, Vector2Scale(dv, 12)), 3.5f, Color{ 200, 50, 50, 255 });
             } else if (b.kind == BK_METEOR) {
                 int v = std::clamp((int)b.aux, 0, 5);
-                drawShip(gfx.meteor[v], b.pos, 24 + v * 1.5f, b.age * (v % 2 ? 260 : -200), false);
+                m3d::draw(gfx.meteor[v], b.age * (v % 2 ? 160 : -130), b.pos, (24 + v * 1.5f) * 1.08f, (float)(v * 25));
             }
         }
         if (playerAlive && mode == PLAYING) {   // missile lock-on reticle
