@@ -2637,7 +2637,15 @@ struct Game {
             float step = sz > 88 ? 8.5f : 7.0f, x0 = W / 2.0f - iw / 2.0f;
             for (float yy = step / 2; yy < ih; yy += step)
                 for (float xx = step / 2; xx < iw; xx += step) {
-                    if (px[(int)yy * iw + (int)xx].a <= 140) continue;
+                    // keep a grid point when enough of its cell is ink (not just the centre pixel), so thin strokes
+                    // such as the bar of an "e" or the dot of an "i" always get monsters
+                    int cov = 0, tot = 0;
+                    for (int cy = (int)(yy - step / 2); cy < (int)(yy + step / 2); ++cy)
+                        for (int cx = (int)(xx - step / 2); cx < (int)(xx + step / 2); ++cx) {
+                            if (cx < 0 || cy < 0 || cx >= iw || cy >= ih) continue;
+                            ++tot; if (px[cy * iw + cx].a > 140) ++cov;
+                        }
+                    if (tot == 0 || cov < 0.3f * tot) continue;
                     SwarmMon m;
                     m.tgt = { x0 + xx, y + yy };
                     float side = m.tgt.x < W / 2 ? -1.f : 1.f;
