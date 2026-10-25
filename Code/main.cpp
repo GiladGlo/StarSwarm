@@ -2674,8 +2674,8 @@ struct Game {
                                "/System/Library/Fonts/Supplemental/Arial Bold.ttf" })
             if (FileExists(f)) { Font ft = LoadFontEx(f, 112, nullptr, 0); if (ft.texture.id) { swarmFont = ft; swarmFontOwn = true; break; } }
         swarmTitles.push_back({ nullptr, buildSwarm({ { "STAR", 92 }, { "SWARM", 92 } }, 70) });
-        swarmTitles.push_back({ "DEVELOPED BY", buildSwarm({ { "Gilad", 86 }, { "Globen", 86 } }, 90) });
-        swarmTitles.push_back({ "DEDICATED TO", buildSwarm({ { "Daniel", 86 }, { "Globen", 86 } }, 90) });
+        swarmTitles.push_back({ "DEVELOPED BY", buildSwarm({ { "GILAD", 86 }, { "GLOBEN", 86 } }, 90) });
+        swarmTitles.push_back({ "DEDICATED TO", buildSwarm({ { "DANIEL", 86 }, { "GLOBEN", 86 } }, 90) });
     }
     static float swEase(float a, float b, float x) { float t = Clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); }
     void drawTitleParticles() {                    // the swarm itself (logical coordinates, inside the camera)

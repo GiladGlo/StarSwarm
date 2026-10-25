@@ -23,7 +23,7 @@ Linux needs X11/GL dev packages: `sudo apt install libx11-dev libxcursor-dev lib
 
 ## Title screen
 
-The titles **STAR SWARM**, **Developed by Gilad Globen** and **Dedicated to Daniel Globen** are spelled by swarms of tiny animated monsters (Nebula Jellies, Void Mantas and Nova Urchins). Each swarm streams in from both sides along curved entry paths, holds as a gently breathing formation for a few seconds, then peels off left to right and dives away as the next swarm arrives (7 s per title).
+The titles **STAR SWARM**, **Developed by GILAD GLOBEN** and **Dedicated to DANIEL GLOBEN** are spelled by swarms of tiny animated monsters (Nebula Jellies, Void Mantas and Nova Urchins). Each swarm streams in from both sides along curved entry paths, holds as a gently breathing formation for a few seconds, then peels off left to right and dives away as the next swarm arrives (7 s per title).
 
 ## Status bar
 
