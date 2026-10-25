@@ -34,6 +34,7 @@ static const float  PLAYER_Y_LOW    = 800 - 70.0f;   // lowest position (the ori
 static const float  PLAYER_Y_HIGH   = 800 - 490.0f;  // how far up the ship may fly (lower ~60% of the screen)
 static const size_t MAX_TORPEDOES = 5;          // projectiles allowed on screen at once
 static const char* HISCORE_FILE = "starswarm_highscore.txt";
+static const char* SETTINGS_FILE = "starswarm_settings.txt";   // title_muted=0/1
 
 // ----------------------------------------------------------------------------
 //  Utility
@@ -479,12 +480,12 @@ struct Game {
             if (onTitle && !IsMusicStreamPlaying(titleMusic)) { SeekMusicStream(titleMusic, fmodf(titleT, sfx::TITLE_LOOP)); PlayMusicStream(titleMusic); musicVol = 0; }
             musicVol = onTitle ? std::min(1.0f, musicVol + dt / 1.5f) : std::max(0.0f, musicVol - dt / 1.0f);
             if (IsMusicStreamPlaying(titleMusic)) {
-                SetMusicVolume(titleMusic, sfx::TITLE_MUSIC_GAIN * musicVol);
+                SetMusicVolume(titleMusic, titleMuted ? 0.0f : sfx::TITLE_MUSIC_GAIN * musicVol);   // muted: keeps playing silently, so unmuting resumes in place
                 UpdateMusicStream(titleMusic);
                 if (!onTitle && musicVol <= 0) StopMusicStream(titleMusic);
             }
         }
-        if (!onTitle || stageDialog) { titleFxPrevT = onTitle ? titleT : -1; return; }
+        if (!onTitle || stageDialog || titleMuted) { titleFxPrevT = onTitle ? titleT : -1; return; }
         auto crossed = [&](float at) {   // did fmod(titleT, cycle) pass `at` since last frame?
             if (titleFxPrevT < 0) return at == 0.0f;
             float a = titleFxPrevT, b = titleT;
@@ -548,7 +549,7 @@ struct Game {
     }
 
     void newGame(int startStage = 1) {
-        if (mode == TITLE) { for (int k = 0; k < sfx::TFX_LAUNCH; ++k) StopSound(titleFx[k]); PlaySound(titleFx[sfx::TFX_LAUNCH]); }
+        if (mode == TITLE) { for (int k = 0; k < sfx::TFX_LAUNCH; ++k) StopSound(titleFx[k]); if (!titleMuted) PlaySound(titleFx[sfx::TFX_LAUNCH]); }
         lives = 3; score = 0; stage = std::clamp(startStage, 1, FINAL_STAGE) - 1; nextLifeAt = 20000; shotsFired = hits = 0;
         playerAlive = true; player = { W / 2.0f, PLAYER_Y_LOW }; invuln = 0; roll = 0; prevPX = player.x; warpT = WARP_TIME;
         pBullets.clear(); eBullets.clear(); parts.clear(); rings.clear(); popups.clear(); meteors.clear(); meteorField = false;
@@ -1889,6 +1890,7 @@ struct Game {
             bool ctrl = IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL);
             if (stageDialog) { updateStageDialog(); return; }
             titleT += dt;
+            if (IsKeyPressed(KEY_M) || (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(mouseLogical(), MUTE_BTN))) toggleTitleMute();
             if (ctrl && IsKeyPressed(KEY_L)) { stageDialog = true; dlgText = "1"; while (GetCharPressed()) {} return; }
             if (IsKeyPressed(KEY_SPACE) || (IsKeyPressed(KEY_ENTER) && !alt)) { debugRun = false; newGame(); }
             return;
@@ -3283,6 +3285,35 @@ struct Game {
     int rosterDropLit() const { return (int)(time * 2.5f) % 5; }
     Color rosterPodCol() const { int i = (int)fmodf(time * 0.8f, 6.0f); return i == 0 ? UPG_COL : WCOL[i < 5 ? i : 4]; }
 
+    // ---- Title-screen mute button (bottom-left, icon only): click or M toggles title music + effects ----
+    bool titleMuted = false;                            // saved in SETTINGS_FILE; gameplay sound is never affected
+    static constexpr Rectangle MUTE_BTN{ 18, 754, 34, 34 };
+    void toggleTitleMute() {
+        titleMuted = !titleMuted;
+        if (titleMuted) for (auto& s : titleFx) StopSound(s);
+        saveSettings();
+    }
+    void drawMuteButtonShapes() {
+        const Rectangle& r = MUTE_BTN;
+        bool hover = CheckCollisionPointRec(mouseLogical(), r);
+        Color edge = titleMuted ? Color{ 255, 90, 80, 255 } : Color{ 120, 200, 255, 255 };
+        DrawRectangleRounded(r, 0.3f, 8, hover ? Color{ 40, 44, 70, 230 } : Color{ 20, 22, 40, 200 });
+        DrawRectangleRoundedLinesEx(r, 0.3f, 8, 1.5f, Color{ edge.r, edge.g, edge.b, (unsigned char)(hover ? 255 : 170) });
+        Vector2 c{ r.x + 13, r.y + r.height / 2 };
+        Color ic = titleMuted ? Color{ 170, 170, 185, 255 } : RAYWHITE;
+        DrawRectangleRec({ c.x - 6, c.y - 4, 5, 8 }, ic);                                  // speaker body
+        DrawTriangle({ c.x - 1, c.y - 4 }, { c.x - 1, c.y + 4 }, { c.x + 5, c.y + 9 }, ic);  // cone
+        DrawTriangle({ c.x - 1, c.y - 4 }, { c.x + 5, c.y + 9 }, { c.x + 5, c.y - 9 }, ic);
+        if (titleMuted) {                                                                   // red X
+            Vector2 x0{ c.x + 13, c.y };
+            DrawLineEx({ x0.x - 5, x0.y - 5 }, { x0.x + 5, x0.y + 5 }, 2.6f, Color{ 255, 90, 80, 255 });
+            DrawLineEx({ x0.x - 5, x0.y + 5 }, { x0.x + 5, x0.y - 5 }, 2.6f, Color{ 255, 90, 80, 255 });
+        } else {                                                                            // sound waves, gently pulsing
+            for (int k = 0; k < 2; ++k) { float rr = 6.5f + k * 5.0f; unsigned char a = (unsigned char)(150 + 100 * (0.5f + 0.5f * sinf(time * 4 - k)));
+                DrawRing({ c.x + 3, c.y }, rr, rr + 1.8f, -45, 45, 12, Color{ 120, 200, 255, a }); }
+        }
+    }
+
     void drawRosterShapes() {
         for (int k = 0; k < 7; ++k)
             drawMonster(gfx.mon[roster()[k].mon], Gfx::MON_FRAMES, time * 0.8f + k * 0.13f, rosterCell(k), ROSTER_ICON, 0);
@@ -3345,6 +3376,7 @@ struct Game {
             drawTitleParticles();
             (void)f;
             drawRosterShapes();
+            drawMuteButtonShapes();
             return;
         }
         if (mode == PLAYING || mode == VICTORY || mode == GAMEOVER) drawStatusPanel();
@@ -3503,7 +3535,10 @@ struct Game {
     }
 
     // --- persistence ----------------------------------------------------------
-    void loadHiScore() { std::ifstream f(HISCORE_FILE); if (f) f >> hiScore; }
+    void loadHiScore() { std::ifstream f(HISCORE_FILE); if (f) f >> hiScore; loadSettings(); }
+    void loadSettings() { std::ifstream f(SETTINGS_FILE); std::string line;
+        while (f && std::getline(f, line)) if (line.rfind("title_muted=", 0) == 0) titleMuted = line.size() > 12 && line[12] == '1'; }
+    void saveSettings() { std::ofstream f(SETTINGS_FILE); if (f) f << "title_muted=" << (titleMuted ? 1 : 0) << "\n"; }
     void saveHiScore() { if (debugRun) return; std::ofstream f(HISCORE_FILE); if (f) f << hiScore; }
 };
 
