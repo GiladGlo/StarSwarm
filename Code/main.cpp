@@ -10,6 +10,7 @@
 #include "meteor3d.h"
 #include "monsters.h"
 #include "sfxsynth.h"
+#include "titlemusic.h"
 #include <thread>
 #include <atomic>
 #include <functional>
@@ -437,6 +438,64 @@ struct Game {
     }
     void stopLaserLoop() { if (IsSoundPlaying(sfx[SFX_LASER_LOOP])) StopSound(sfx[SFX_LASER_LOOP]); }
 
+    // ---- Title screen audio: looping dark-ambient music (titlemusic.h) + swarm / launch effects ----
+    Music titleMusic{}; bool titleMusicOk = false;
+    std::vector<unsigned char> titleMusicWav;          // in-memory WAV the music stream decodes from (must stay alive)
+    Sound titleFx[sfx::TFX_COUNT]{};
+    float musicVol = 0;                                 // 0..1 fade level (music volume = gain * musicVol)
+    float titleFxPrevT = -1;                            // titleT on the previous frame (to catch swarm-cycle events)
+    static std::vector<unsigned char> makeWav(const std::vector<float>& v, int rate) {
+        std::vector<unsigned char> b(44 + v.size() * 2);
+        auto w32 = [&](size_t o, uint32_t x) { memcpy(&b[o], &x, 4); }; auto w16 = [&](size_t o, uint16_t x) { memcpy(&b[o], &x, 2); };
+        memcpy(&b[0], "RIFF", 4); w32(4, (uint32_t)(36 + v.size() * 2)); memcpy(&b[8], "WAVEfmt ", 8); w32(16, 16); w16(20, 1); w16(22, 1);
+        w32(24, rate); w32(28, rate * 2); w16(32, 2); w16(34, 16); memcpy(&b[36], "data", 4); w32(40, (uint32_t)(v.size() * 2));
+        for (size_t i = 0; i < v.size(); ++i) { int16_t x = (int16_t)(Clamp(v[i], -1.0f, 1.0f) * 32767); memcpy(&b[44 + i * 2], &x, 2); }
+        return b;
+    }
+    void loadTitleAudio(const std::vector<float>& music) {
+        const int rate = 44100;
+        titleMusicWav = makeWav(music, rate);
+        titleMusic = LoadMusicStreamFromMemory(".wav", titleMusicWav.data(), (int)titleMusicWav.size());
+        titleMusicOk = titleMusic.stream.buffer != nullptr;
+        if (titleMusicOk) titleMusic.looping = true;
+        for (int k = 0; k < sfx::TFX_COUNT; ++k) {
+            std::vector<float> v = sfx::renderTitleFx((sfx::TitleFx)k, (float)rate);
+            short* data = (short*)malloc(sizeof(short) * v.size());
+            for (size_t i = 0; i < v.size(); ++i) data[i] = (short)(Clamp(v[i], -1.0f, 1.0f) * 32767);
+            Wave w{ (unsigned)v.size(), (unsigned)rate, 16, 1, data };
+            titleFx[k] = LoadSoundFromWave(w); UnloadWave(w);
+            SetSoundVolume(titleFx[k], sfx::titleFxGain((sfx::TitleFx)k));
+        }
+    }
+    void unloadTitleAudio() {
+        if (titleMusicOk) { StopMusicStream(titleMusic); UnloadMusicStream(titleMusic); }
+        for (auto& s : titleFx) UnloadSound(s);
+    }
+    // Called every frame: music fades in on the title screen (restarting with the title cycle) and fades out
+    // over ~1 s once a game starts; swarm effects fire at the cycle's stream-in, lock-in and peel-off moments.
+    void updateTitleAudio(float dt) {
+        bool onTitle = mode == TITLE;
+        if (titleMusicOk) {
+            if (onTitle && !IsMusicStreamPlaying(titleMusic)) { SeekMusicStream(titleMusic, fmodf(titleT, sfx::TITLE_LOOP)); PlayMusicStream(titleMusic); musicVol = 0; }
+            musicVol = onTitle ? std::min(1.0f, musicVol + dt / 1.5f) : std::max(0.0f, musicVol - dt / 1.0f);
+            if (IsMusicStreamPlaying(titleMusic)) {
+                SetMusicVolume(titleMusic, sfx::TITLE_MUSIC_GAIN * musicVol);
+                UpdateMusicStream(titleMusic);
+                if (!onTitle && musicVol <= 0) StopMusicStream(titleMusic);
+            }
+        }
+        if (!onTitle || stageDialog) { titleFxPrevT = onTitle ? titleT : -1; return; }
+        auto crossed = [&](float at) {   // did fmod(titleT, cycle) pass `at` since last frame?
+            if (titleFxPrevT < 0) return at == 0.0f;
+            float a = titleFxPrevT, b = titleT;
+            return floorf((b - at) / SW_CYCLE) > floorf((a - at) / SW_CYCLE);
+        };
+        if (crossed(0.0f))      PlaySound(titleFx[sfx::TFX_SWARM_IN]);
+        if (crossed(SW_IN))     PlaySound(titleFx[sfx::TFX_SWARM_LOCK]);
+        if (crossed(SW_OUT_AT)) PlaySound(titleFx[sfx::TFX_SWARM_OUT]);
+        titleFxPrevT = titleT;
+    }
+
     Vector2 player{ W / 2.0f, PLAYER_Y_LOW };
     bool  playerAlive = true;
     float respawnTimer = 0, invuln = 0, fireCooldown = 0;
@@ -489,6 +548,7 @@ struct Game {
     }
 
     void newGame(int startStage = 1) {
+        if (mode == TITLE) { for (int k = 0; k < sfx::TFX_LAUNCH; ++k) StopSound(titleFx[k]); PlaySound(titleFx[sfx::TFX_LAUNCH]); }
         lives = 3; score = 0; stage = std::clamp(startStage, 1, FINAL_STAGE) - 1; nextLifeAt = 20000; shotsFired = hits = 0;
         playerAlive = true; player = { W / 2.0f, PLAYER_Y_LOW }; invuln = 0; roll = 0; prevPX = player.x; warpT = WARP_TIME;
         pBullets.clear(); eBullets.clear(); parts.clear(); rings.clear(); popups.clear(); meteors.clear(); meteorField = false;
@@ -1763,7 +1823,8 @@ struct Game {
         boss = Boss{}; meteorField = false; shake = 0; hyperT = -1;
         droneOn = false; laserOn = false; heat = 0; overheated = false; stopLaserLoop();
         playerAlive = false; invuln = 0; shield = false; bannerTimer = 0; stageTimer = 0;
-        mode = TITLE; titleT = 0; paused = false;
+        mode = TITLE; titleT = 0; paused = false; titleFxPrevT = -1;
+        if (titleMusicOk) StopMusicStream(titleMusic);   // restarts from the top (in sync with the title cycle), fading in
     }
 
     void escChoose(int i) {
@@ -3485,7 +3546,11 @@ int main(int argc, char** argv) {
     game.loadHiScore();
     game.loadFont();
     game.buildTitleParticles();
+    std::vector<float> titleMusicPcm;
+    std::thread musicJob([&] { titleMusicPcm = sfx::renderTitleMusic(44100); });   // synthesise while the graphics render
     gfx.load();
+    musicJob.join();
+    game.loadTitleAudio(titleMusicPcm);
     if (selftest) {
         int st = (argc > 3 && isdigit((unsigned char)argv[3][0])) ? atoi(argv[3]) : 1;
         if (argc > 3 && std::string(argv[3]) == "boss") st = CYCLE;
@@ -3519,6 +3584,7 @@ int main(int argc, char** argv) {
         }
         if (selftest && argc > 3 && std::string(argv[3]) == "break" && frame == shotFrame - 6 && game.shield) game.breakShield({ game.player.x, game.player.y - SHIELD_RADIUS });
         game.update(dt);
+        game.updateTitleAudio(dt);
         if (game.quitRequested) break;
         if (game.paused || game.escMenu || game.mode != PLAYING || !game.playerAlive) game.stopLaserLoop();   // beam hum never outlives the beam
         game.draw();
@@ -3529,6 +3595,7 @@ int main(int argc, char** argv) {
     if (game.score >= game.hiScore) game.saveHiScore();
     if (game.customFont) UnloadFont(game.font);
     gfx.unload();
+    game.unloadTitleAudio();
     game.unloadSfx();
     CloseAudioDevice();
     CloseWindow();
