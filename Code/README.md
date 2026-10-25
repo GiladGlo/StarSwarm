@@ -40,6 +40,7 @@ The bottom of the screen is a status bar with four fixed areas, so indicators ne
 | P | Pause |
 | Esc | Pause menu: **Resume game**, **End current game** (back to the title screen) or **Exit to desktop**. Pick with ↑/↓ + Enter, keys 1–3 or the mouse; Esc again resumes. On the title screen Esc quits |
 | F11 / Alt+Enter | Toggle fullscreen |
+| M | Mute / unmute the music (title screen: title music + effects; in game: background music only). Also the speaker icons in the corners |
 
 **Your fighter:** a detailed ship (panelled wings with flaps, missile pods, ribbed cannons, engine intakes and petalled nozzles, framed canopy with a pilot) with live effects: it banks into turns, its twin engines burn with shock-diamond plumes and stream exhaust, side thrusters puff on sharp direction changes, red/green wingtip and white tail lights strobe, a glint sweeps across the canopy, the cannons flash when firing, and it warps in on every (re)spawn.
 
@@ -151,5 +152,6 @@ All sound effects are synthesised at startup by `sfxsynth.h`, a small procedural
   - Stages crossfade into each other over 1.5 s.
   - The boss music fades out as the boss explodes, so the hyperspace jump is quiet.
   - The music pauses with the game and fades out on game over and victory.
+- **In-game music mute:** the speaker icon in the top-right corner during play (click it or press **M**, also while paused) turns the background music off or on. Sound effects keep playing. The setting is saved in `starswarm_settings.txt`.
 - **Mute button:** the speaker icon in the bottom-left corner of the title screen (click it or press **M**) mutes or unmutes the title music and effects. Gameplay sound isn't affected. The setting is saved in `starswarm_settings.txt` next to the exe.
 - **Everything else:** armour hits, torpedo impacts, the outpost flak cannon, shield up and break, stage and extra-life jingles, the boss alarm, enemy dives and the boss lance beam.
