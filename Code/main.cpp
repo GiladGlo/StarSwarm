@@ -9,6 +9,7 @@
 #include "sprites.h"
 #include "meteor3d.h"
 #include "monsters.h"
+#include "sfxsynth.h"
 #include <thread>
 #include <atomic>
 #include <functional>
@@ -253,72 +254,24 @@ static void drawGlow(Vector2 pos, float radius, Color c) {
 // ----------------------------------------------------------------------------
 //  Synthesized sound effects
 // ----------------------------------------------------------------------------
-enum SfxKind { SFX_SHOOT, SFX_HIT, SFX_BOOM, SFX_DEATH, SFX_STAGE, SFX_DIVE, SFX_LIFE, SFX_IMPACT, SFX_SHIELD_UP, SFX_SHIELD_BREAK, SFX_ALARM, SFX_LASER, SFX_BIGBOOM, SFX_COUNT };
+enum SfxKind { SFX_SHOOT, SFX_HIT, SFX_BOOM, SFX_DEATH, SFX_STAGE, SFX_DIVE, SFX_LIFE, SFX_IMPACT, SFX_SHIELD_UP, SFX_SHIELD_BREAK, SFX_ALARM, SFX_LASER, SFX_BIGBOOM,
+               SFX_FIRE_SPREAD, SFX_FIRE_HOMING, SFX_FIRE_ION, SFX_LASER_LOOP, SFX_OVERHEAT, SFX_ION_BLAST, SFX_FLAK, SFX_COUNT };
+// Each game sound is rendered at startup by the procedural synth in sfxsynth.h (bass-heavy, 44.1 kHz)
+static const sfx::Id SFX_SYNTH[SFX_COUNT] = { sfx::FIRE_PHOTON, sfx::HIT, sfx::BOOM, sfx::DEATH, sfx::STAGE, sfx::DIVE, sfx::LIFE, sfx::IMPACT,
+    sfx::SHIELD_UP, sfx::SHIELD_BREAK, sfx::ALARM, sfx::BOSS_LASER, sfx::BIGBOOM,
+    sfx::FIRE_SPREAD, sfx::FIRE_HOMING, sfx::FIRE_ION, sfx::LASER_LOOP, sfx::OVERHEAT, sfx::ION_BLAST, sfx::FLAK };
+static const int SFX_VOICES = 3;   // overlapping copies per sound (rapid fire / chained explosions)
 
 static Sound makeSound(SfxKind k) {
-    const int rate = 22050;
-    float dur = 0.15f;
-    switch (k) {
-        case SFX_SHOOT: dur = 0.32f; break;  case SFX_ALARM: dur = 2.0f; break;  case SFX_LASER: dur = 1.3f; break;  case SFX_BIGBOOM: dur = 2.2f; break;  case SFX_SHIELD_UP: dur = 0.45f; break;  case SFX_SHIELD_BREAK: dur = 0.6f; break;  case SFX_IMPACT: dur = 0.18f; break;  case SFX_HIT:   dur = 0.10f; break;
-        case SFX_BOOM:  dur = 0.35f; break;  case SFX_DEATH: dur = 1.20f; break;
-        case SFX_STAGE: dur = 0.90f; break;  case SFX_DIVE:  dur = 0.45f; break;
-        case SFX_LIFE:  dur = 0.60f; break;
-        default: break;
-    }
-    int frames = (int)(rate * dur);
-    short* data = (short*)malloc(sizeof(short) * frames);
-    float phase = 0, noise = 0;
-    for (int i = 0; i < frames; ++i) {
-        float t = (float)i / rate, p = t / dur, env = 1 - p, f = 440, s = 0;
-        switch (k) {
-            case SFX_SHOOT: f = 160 + 900 * expf(-p * 6) + 40 * sinf(t * 90); env = (1 - p) * (1 - p); break;
-            case SFX_IMPACT: f = 700 * expf(-p * 4); env = (1 - p); break;
-            case SFX_ALARM: f = fmodf(t, 0.5f) < 0.25f ? 620 : 470; env = 0.55f * (fmodf(t, 0.5f) < 0.45f ? 1.f : 0.f); break;
-            case SFX_LASER: f = 90 + 25 * sinf(t * 40); env = std::min(1.0f, t * 8) * (1 - p * p); break;
-            case SFX_SHIELD_UP: f = 300 + 900 * p + 80 * sinf(t * 70); env = 0.5f * sinf(p * PI); break;
-            case SFX_SHIELD_BREAK: f = 1800 * expf(-p * 3) + 150; env = (1 - p) * (1 - p); break;
-            case SFX_HIT:   f = 300 + 900 * p;   break;
-            case SFX_DIVE:  f = 900 - 500 * p + 60 * sinf(t * 60); env = 0.6f * (1 - p); break;
-            case SFX_STAGE: { static const float n[] = { 523, 659, 784, 1047, 784, 1047 };
-                              f = n[std::min(5, (int)(p * 6))]; env = 0.7f; break; }
-            case SFX_LIFE:  { static const float n[] = { 784, 988, 1175, 1568 };
-                              f = n[(int)(p * 12) % 4]; env = 0.6f * (1 - p); break; }
-            default: break;
-        }
-        if (k == SFX_SHIELD_UP || k == SFX_SHIELD_BREAK) {
-            // shimmering energy: detuned sines (+ glassy noise on break)
-            phase += f / rate;
-            if (i % 2 == 0) noise = frand(-1, 1);
-            s = (0.5f * sinf(phase * 2 * PI) + 0.35f * sinf(phase * 2 * PI * 1.51f) + 0.15f * sinf(phase * 2 * PI * 3.02f)) * env;
-            if (k == SFX_SHIELD_BREAK) s += noise * env * env * 0.9f * (fmodf(t * 37, 1.0f) < 0.5f ? 1.f : 0.4f);
-            s *= 1.3f;
-        } else if (k == SFX_SHOOT || k == SFX_IMPACT) {
-            // photon "whoomp": sine sweep + soft noise burst
-            phase += f / rate;
-            if (i % 2 == 0) noise = frand(-1, 1);
-            s = (0.75f * sinf(phase * 2 * PI) + 0.25f * (fmodf(phase * 2, 1.0f) < 0.5f ? 1.f : -1.f)) * env
-              + noise * env * env * (k == SFX_IMPACT ? 0.8f : 0.3f);
-            s *= 1.4f;
-        } else if (k == SFX_LASER) {
-            phase += f / rate; if (i % 3 == 0) noise = frand(-1, 1);
-            s = (0.6f * (fmodf(phase, 1.0f) * 2 - 1) + 0.4f * noise) * env;
-        } else if (k == SFX_BIGBOOM) {
-            if (i % 8 == 0) noise = frand(-1, 1);
-            float e2 = expf(-p * 2.5f) * (0.7f + 0.3f * sinf(t * 23));
-            s = (0.8f * noise + 0.4f * sinf(t * (60 - 30 * p) * 2 * PI)) * e2;
-        } else if (k == SFX_BOOM || k == SFX_DEATH) {
-            if (i % (k == SFX_DEATH ? 6 : 3) == 0) noise = frand(-1, 1);
-            s = noise * env * env;
-            if (k == SFX_DEATH) s = 0.6f * s + 0.4f * (sinf(t * (300 - 220 * p) * 2 * PI) > 0 ? 1.f : -1.f) * env * env;
-        } else {
-            phase += f / rate;
-            s = (fmodf(phase, 1.0f) < 0.5f ? 1.f : -1.f) * env;
-        }
-        data[i] = (short)(s * 0.25f * 32767);
-    }
-    Wave w{ (unsigned)frames, (unsigned)rate, 16, 1, data };
+    const int rate = 44100;
+    std::vector<float> v = sfx::render(SFX_SYNTH[k], (float)rate);
+    if (k == SFX_LASER_LOOP) { std::vector<float> l; for (int r = 0; r < 4; ++r) l.insert(l.end(), v.begin(), v.end()); v.swap(l); }   // 4 s seamless loop
+    short* data = (short*)malloc(sizeof(short) * v.size());
+    for (size_t i = 0; i < v.size(); ++i) data[i] = (short)(Clamp(v[i], -1.0f, 1.0f) * 32767);
+    Wave w{ (unsigned)v.size(), (unsigned)rate, 16, 1, data };
     Sound snd = LoadSoundFromWave(w);
     UnloadWave(w);
+    SetSoundVolume(snd, sfx::gain(SFX_SYNTH[k]));
     return snd;
 }
 
@@ -468,6 +421,21 @@ struct Game {
     std::vector<Popup>    popups;
     std::vector<Star>     stars;
     Sound sfx[SFX_COUNT];
+    Sound sfxVoice[SFX_COUNT][SFX_VOICES - 1]{};    // aliases sharing the sample data, so a sound can overlap itself
+    int   sfxNext[SFX_COUNT]{};
+    void loadSfx() {
+        for (int i = 0; i < SFX_COUNT; ++i) {
+            sfx[i] = makeSound((SfxKind)i);
+            if (sfx[i].stream.buffer)   // no audio device: keep the empty sounds (playing them is a no-op)
+                for (int v = 0; v < SFX_VOICES - 1; ++v) { sfxVoice[i][v] = LoadSoundAlias(sfx[i]); SetSoundVolume(sfxVoice[i][v], sfx::gain(SFX_SYNTH[i])); }
+        }
+    }
+    void unloadSfx() { for (int i = 0; i < SFX_COUNT; ++i) { for (auto& a : sfxVoice[i]) if (a.stream.buffer) UnloadSoundAlias(a); UnloadSound(sfx[i]); } }
+    void playSfx(SfxKind k) {   // round-robin over the voices of this sound
+        int v = sfxNext[k]; sfxNext[k] = (v + 1) % SFX_VOICES;
+        PlaySound(v == 0 ? sfx[k] : sfxVoice[k][v - 1]);
+    }
+    void stopLaserLoop() { if (IsSoundPlaying(sfx[SFX_LASER_LOOP])) StopSound(sfx[SFX_LASER_LOOP]); }
 
     Vector2 player{ W / 2.0f, PLAYER_Y_LOW };
     bool  playerAlive = true;
@@ -554,7 +522,7 @@ struct Game {
     void raiseShield() {
         if (shield) return;
         shield = true; shieldGrow = 0; shieldHitFlash = 0; shieldRegen = 0;
-        PlaySound(sfx[SFX_SHIELD_UP]);
+        playSfx(SFX_SHIELD_UP);
     }
 
     void nextStage() {
@@ -566,7 +534,7 @@ struct Game {
         meteors.clear(); meteorField = false;
         if (stageKind(stage) == SK_BOSS)    { startBoss(); return; }
         if (stageKind(stage) == SK_METEORS) { startMeteorField(); return; }
-        PlaySound(sfx[SFX_STAGE]);
+        playSfx(SFX_STAGE);
 
         // ---- build this wave: formation shape, new enemy types, entry paths
         int cyc = cycleIndex(), waveInCycle = (stage - 1) % CYCLE, waveNo = cyc * 4 + waveInCycle;
@@ -672,7 +640,7 @@ struct Game {
         fieldDur = 30.0f + 2.0f * cycleIndex();
         targetDensity = std::min(0.45f, 0.30f + 0.017f * cycleIndex());
         bannerTimer = 3.0f;
-        PlaySound(sfx[SFX_STAGE]);
+        playSfx(SFX_STAGE);
     }
 
     float density() const {   // fraction of the playfield covered by rock
@@ -745,7 +713,7 @@ struct Game {
             explode(at, Color{ 255, 200, 120, 255 }, Color{ 240, 140, 40, 255 }, 14, 160);
             shake = std::max(shake, 0.15f);
         }
-        PlaySound(sfx[SFX_IMPACT]);
+        playSfx(SFX_IMPACT);
     }
     // Point-defence turret + damage smoke/sparks, run each frame for every outpost rock
     void updateOutpost(Meteor& m, float dt) {
@@ -760,6 +728,7 @@ struct Game {
             float a = m.gunAim * DEG2RAD, sp = 150 + 6 * cycleIndex();
             Vector2 mz{ g.x + cosf(a) * 15, g.y + sinf(a) * 15 };
             eBullets.push_back({ mz, { cosf(a) * sp, sinf(a) * sp }, BK_FLAK });
+            playSfx(SFX_FLAK);
             for (int i = 0; i < 6; ++i) { float b = a + frand(-0.5f, 0.5f), v = frand(60, 160), life = frand(0.1f, 0.25f);
                 parts.push_back({ mz, { cosf(b) * v, sinf(b) * v }, life, life, frand(1.5f, 2.5f), Color{ 255, 120, 60, 255 }, SPARK }); }
             m.gunT = std::max(1.8f, 2.4f - 0.08f * cycleIndex());
@@ -785,7 +754,7 @@ struct Game {
             parts.push_back({ m.pos, { cosf(a) * sp, sinf(a) * sp }, life, life, frand(2, 4),
                               GetRandomValue(0, 2) ? Color{ 200, 205, 215, 255 } : Color{ 240, 140, 40, 255 }, DEBRIS, frand(0, 360), frand(-700, 700) }); }
         shake = std::max(shake, 0.3f);
-        PlaySound(sfx[SFX_BOOM]);
+        playSfx(SFX_BOOM);
         addScore(500);
         popups.push_back({ { m.pos.x - 30, m.pos.y - 14 }, 1.2f, "OUTPOST +500" });
         packages.push_back({ { m.pos.x, m.pos.y + 6 }, rollCargo(), 0 });
@@ -808,7 +777,7 @@ struct Game {
                               Color{ 200, 60, 40, 255 }, DEBRIS, frand(0, 360), frand(-700, 700) });
         }
         shake = std::max(shake, 0.45f);
-        PlaySound(sfx[SFX_BOOM]); PlaySound(sfx[SFX_IMPACT]);
+        playSfx(SFX_BOOM); playSfx(SFX_IMPACT);
         popups.push_back({ { m.pos.x - 22, m.pos.y - 10 }, 1.0f, "BOOM!" });
 
         std::vector<int> caught;
@@ -840,7 +809,7 @@ struct Game {
             parts.push_back({ m.pos, { cosf(ang) * sp, sinf(ang) * sp }, life, life, m.r() * frand(0.4f, 0.7f), Color{ 110, 95, 85, 255 }, SMOKE });
         }
         if (m.variant == 1 || m.variant == 4) explode(m.pos, hot, YELLOW, 10, 160);
-        PlaySound(sfx[m.size == M_SMALL ? SFX_BOOM : SFX_HIT]);
+        playSfx(m.size == M_SMALL ? SFX_BOOM : SFX_HIT);
         if (m.size == M_SMALL) return;
         MSize child = (MSize)(m.size - 1);
         Vector2 side = Vector2Normalize({ -hitDir.y, hitDir.x });
@@ -886,7 +855,7 @@ struct Game {
             int bonus = 1000 * (cycleIndex() + 1);
             addScore(bonus);
             popups.push_back({ { W / 2.0f - 100, H / 2.0f }, 2.0f, TextFormat("FIELD CLEARED  +%d", bonus) });
-            PlaySound(sfx[SFX_LIFE]);
+            playSfx(SFX_LIFE);
         }
     }
 
@@ -983,7 +952,7 @@ struct Game {
         boss.maxHp = boss.hp = BOSS_HP[boss.index];
         boss.pos = { W / 2.0f, -boss.size() * 0.6f };
         bannerTimer = 3.5f;
-        PlaySound(sfx[SFX_ALARM]);
+        playSfx(SFX_ALARM);
     }
 
     void bossShoot(Vector2 from, float angleDeg, float speed, int kind = 1) {
@@ -1062,7 +1031,7 @@ struct Game {
                 Vector2 p{ b.pos.x + frand(-half, half), b.pos.y + frand(-half * 0.5f, half * 0.6f) };
                 Color c = bossColor(b.D().core);
                 explode(p, GetRandomValue(0, 1) ? ORANGE : c, WHITE, 22, 220);
-                PlaySound(sfx[SFX_BOOM]);
+                playSfx(SFX_BOOM);
             }
             b.pos.y += 12 * dt;
             if (b.dyingT > 2.6f + 0.15f * b.index) {   // final detonation
@@ -1074,7 +1043,7 @@ struct Game {
                 int bonus = 5000 * (b.index + 1);
                 addScore(bonus);
                 popups.push_back({ { W / 2.0f - 130, b.pos.y }, 2.5f, TextFormat("%s DESTROYED  +%d", b.D().name, bonus) });
-                PlaySound(sfx[SFX_BIGBOOM]);
+                playSfx(SFX_BIGBOOM);
                 b.active = false;
                 if (b.index == BOSS_COUNT - 1) { mode = VICTORY; stageTimer = 0; fireworkT = 0.5f; saveHiScore(); }
             }
@@ -1129,7 +1098,7 @@ struct Game {
                     float spread = 80 + 6 * b.index, base = 90 + (b.step % 2 ? spread / (2 * (n - 1)) : 0);
                     for (int i = 0; i < n; ++i) bossShoot(b.core(), base - spread / 2 + spread * i / (n - 1), 200 * diff, BK_ORB);
                     muzzleFlash(b.core(), coreColor(), 34);
-                    PlaySound(sfx[SFX_DIVE]);
+                    playSfx(SFX_DIVE);
                     ++b.step; b.fireT = 0.45f / ag;
                 } else if (b.step >= volleys && b.fireT <= 0) b.attack = A_NONE;
                 break;
@@ -1168,7 +1137,7 @@ struct Game {
                     for (int i = 0; i < n; ++i) bossShoot(b.core(), off + i * 360.0f / n, 160 * diff, BK_CRYSTAL);
                     rings.push_back({ b.core(), 1.6f, 1.6f, 160 * diff * 1.6f, coreColor(150) });   // shockwave travels with the ring
                     muzzleFlash(b.core(), coreColor(), 40);
-                    PlaySound(sfx[SFX_DIVE]);
+                    playSfx(SFX_DIVE);
                     ++b.step; b.fireT = 0.55f / ag;
                 } else if (b.step >= rings_ && b.fireT <= 0) b.attack = A_NONE;
                 break;
@@ -1179,7 +1148,7 @@ struct Game {
                     Vector2 w = b.turret(b.step);
                     bossShoot(w, 90 + frand(-50, 50), 150, BK_MISSILE);
                     muzzleFlash(w, Color{ 255, 150, 60, 255 }, 18);
-                    PlaySound(sfx[SFX_DIVE]);
+                    playSfx(SFX_DIVE);
                     ++b.step; b.fireT = 0.35f;
                 } else if (b.step >= n && b.fireT <= 0) b.attack = A_NONE;
                 break;
@@ -1203,7 +1172,7 @@ struct Game {
                         }
                 }
                 if (b.step == 0 && b.attackT > charge) {
-                    b.step = 1; b.ignite = 0.3f; PlaySound(sfx[SFX_LASER]); shake = std::max(shake, 0.45f);
+                    b.step = 1; b.ignite = 0.3f; playSfx(SFX_LASER); shake = std::max(shake, 0.45f);
                     for (Vector2 o : b.beams()) muzzleFlash(o, coreColor(), 50);
                 }
                 if (b.step == 1) {
@@ -1253,7 +1222,7 @@ struct Game {
             for (auto& e : enemies) if (e.state != DEAD && e.minion) { e.state = DEAD; explode(e.pos, ORANGE, WHITE, 20, 180); }
             for (auto& eb : eBullets) explode(eb.pos, PURPLE, WHITE, 3, 60);
             eBullets.clear();
-            PlaySound(sfx[SFX_DEATH]);
+            playSfx(SFX_DEATH);
         }
         (void)at;
     }
@@ -1494,14 +1463,14 @@ struct Game {
         eBullets.clear(); pBullets.clear(); warnings.clear();
         hstars.clear();
         for (int i = 0; i < 420; ++i) hstars.push_back({ frand(-900, 900), frand(-1100, 1100), frand(-250, 4000) });
-        PlaySound(sfx[SFX_SHIELD_UP]);
+        playSfx(SFX_SHIELD_UP);
     }
     void updateHyper(float dt) {
         float prev = hyperT; hyperT += dt;
         float st = hyperStreak(), speed = 2600 * st * st + 1;
         for (auto& q : hstars) { q.s -= speed * dt; if (q.s < -260) { q.s = frand(3000, 4000); q.lx = frand(-900, 900); q.ly = frand(-1100, 1100); } }
-        if (prev < 2.0f && hyperT >= 2.0f) PlaySound(sfx[SFX_DIVE]);
-        if (prev < 2.9f && hyperT >= 2.9f) { PlaySound(sfx[SFX_BIGBOOM]); shake = 0.3f; }
+        if (prev < 2.0f && hyperT >= 2.0f) playSfx(SFX_DIVE);
+        if (prev < 2.9f && hyperT >= 2.9f) { playSfx(SFX_BIGBOOM); shake = 0.3f; }
         if (!hyperSwitched && hyperT >= HYPER_SWITCH) {          // out the other side: next stage, ship warps in
             hyperSwitched = true;
             player = { W / 2.0f, PLAYER_Y_LOW }; prevPX = player.x; roll = 0; warpT = WARP_TIME; invuln = 1.2f;
@@ -1607,7 +1576,7 @@ struct Game {
         e.speed = (e.type == BOSS ? 280 : e.type == DART ? 520 : e.type == MINI ? 380 : 320) * difficulty();
         e.shotsLeft = 1 + (stage >= 3 ? GetRandomValue(0, 2) : GetRandomValue(0, 1));
         e.shootTimer = frand(0.3f, 0.8f);
-        PlaySound(sfx[SFX_DIVE]);
+        playSfx(SFX_DIVE);
     }
 
     // --- effects ------------------------------------------------------------
@@ -1644,14 +1613,14 @@ struct Game {
             parts.push_back({ p, { cosf(ang) * sp, sinf(ang) * sp }, life, life, frand(1.2f, 2.4f),
                               GetRandomValue(0, 1) ? Color{ 255, 120, 50, 255 } : Color{ 255, 230, 150, 255 }, SPARK });
         }
-        PlaySound(sfx[SFX_IMPACT]);
+        playSfx(SFX_IMPACT);
     }
 
     void addScore(int pts) {
         score += pts;
         if (score > hiScore && !debugRun) hiScore = score;
         if (score >= nextLifeAt) {
-            ++lives; nextLifeAt += 50000; PlaySound(sfx[SFX_LIFE]);
+            ++lives; nextLifeAt += 50000; playSfx(SFX_LIFE);
             popups.push_back({ { player.x, player.y - 40 }, 1.5f, "1UP!" });
         }
     }
@@ -1674,7 +1643,7 @@ struct Game {
             float ang = frand(0, 2 * PI), sp = frand(150, 380), life = frand(0.2f, 0.5f);
             parts.push_back({ at, { cosf(ang) * sp, sinf(ang) * sp }, life, life, frand(1.2f, 2.4f), cy, SPARK });
         }
-        PlaySound(sfx[SFX_SHIELD_BREAK]);
+        playSfx(SFX_SHIELD_BREAK);
     }
 
     void killPlayer() {
@@ -1686,7 +1655,7 @@ struct Game {
         playerAlive = false; respawnTimer = 2.5f; shake = 0.6f; --lives;
         explode(player, WHITE, RED, 80, 320);
         explode(player, YELLOW, ORANGE, 40, 200);
-        PlaySound(sfx[SFX_DEATH]);
+        playSfx(SFX_DEATH);
     }
 
 
@@ -1864,7 +1833,7 @@ struct Game {
                 Color cs[] = { GOLD, SKYBLUE, PINK, LIME, ORANGE, VIOLET };
                 Vector2 p{ frand(60, W - 60.0f), frand(80, H * 0.6f) };
                 explode(p, cs[GetRandomValue(0, 5)], WHITE, 40, 260);
-                PlaySound(sfx[SFX_BOOM]);
+                playSfx(SFX_BOOM);
             }
             if (stageTimer > 3.0f && (IsKeyPressed(KEY_SPACE) || IsKeyPressed(KEY_ENTER))) mode = TITLE;
             return;
@@ -1946,7 +1915,7 @@ struct Game {
             if (trigger && !overheated) {
                 laserOn = true;
                 heat += rate[wlevel] * dt;
-                if (heat >= 1) { heat = 1; overheated = true; PlaySound(sfx[SFX_HIT]); }
+                if (heat >= 1) { heat = 1; overheated = true; playSfx(SFX_OVERHEAT); }
                 updateLaser(dt);
             } else {
                 heat = std::max(0.0f, heat - dt * (overheated ? 0.8f : 1.2f));
@@ -1954,7 +1923,10 @@ struct Game {
                 if (overheated && GetRandomValue(0, 3) == 0) { float life = frand(0.4f, 0.7f);
                     parts.push_back({ { player.x, player.y - 26 }, { frand(-10, 10), frand(-40, -20) }, life, life, 6, Color{ 120, 120, 130, 255 }, SMOKE }); }
             }
-        } else if (trigger && fireCooldown <= 0) { size_t nb = pBullets.size(); firePlayerWeapon(); if (pBullets.size() > nb && weapon != W_PULSE) muzzleT = 0.07f; }
+        }
+        if (laserOn) { if (!IsSoundPlaying(sfx[SFX_LASER_LOOP])) PlaySound(sfx[SFX_LASER_LOOP]); }   // beam hum while firing
+        else stopLaserLoop();
+        if (weapon != W_PULSE && trigger && fireCooldown <= 0) { size_t nb = pBullets.size(); firePlayerWeapon(); if (pBullets.size() > nb && weapon != W_PULSE) muzzleT = 0.07f; }
     }
 
     void followPath(Enemy& e, float dist) {
@@ -2194,14 +2166,14 @@ struct Game {
         if (droneOn) return;                             // already flying: just refresh the timer
         droneOn = true; droneWarp = 0.6f; droneFireT = 0.8f; droneBank = 0;
         droneOff = droneTarget = { -50, 0 }; droneVel = { 0, 0 };
-        PlaySound(sfx[SFX_SHIELD_UP]);
+        playSfx(SFX_SHIELD_UP);
     }
     void destroyDrone() {
         Vector2 d = Vector2Add(player, droneOff);
         explode(d, Color{ 140, 255, 170, 255 }, Color{ 220, 230, 245, 255 }, 26, 240);
         for (int i = 0; i < 10; ++i) { float a = frand(0, 2 * PI), sp = frand(80, 220), life = frand(0.4f, 0.8f);
             parts.push_back({ d, { cosf(a) * sp, sinf(a) * sp }, life, life, frand(2, 3.5f), Color{ 200, 210, 225, 255 }, DEBRIS, frand(0, 360), frand(-800, 800) }); }
-        PlaySound(sfx[SFX_BOOM]);
+        playSfx(SFX_BOOM);
         droneOn = false;
     }
     // The drone flies on an arc around the ship (left -> over the top -> right, never below or on it, 42..90 units out).
@@ -2347,14 +2319,14 @@ struct Game {
         fireCooldown = wCooldown(); ++shotsFired;
         Color c = WCOL[weapon];
         parts.push_back({ m, { 0, 0 }, 0.12f, 0.12f, 22, c, FLASH });
-        PlaySound(sfx[SFX_SHOOT]);
+        playSfx(weapon == W_SPREAD ? SFX_FIRE_SPREAD : weapon == W_HOMING ? SFX_FIRE_HOMING : weapon == W_ION ? SFX_FIRE_ION : SFX_SHOOT);
     }
 
     // Damage one enemy by one hit. Returns true if it was destroyed.
     bool hitEnemy(Enemy& e, Vector2 at) {
         (void)at;
         if (--e.hp > 0) {
-            PlaySound(sfx[SFX_HIT]);
+            playSfx(SFX_HIT);
             if (e.type == SHIELDED) {          // energy shield pops in a burst of cyan shards
                 rings.push_back({ e.pos, 0.3f, 0.3f, 36, Color{ 90, 255, 240, 255 } });
                 for (int q = 0; q < 16; ++q) {
@@ -2387,7 +2359,7 @@ struct Game {
             packages.push_back({ { e.pos.x, e.pos.y + 6 }, e.cargo, 0 });
         } else {
             explode(e.pos, enemyColor(e.type), WHITE, e.type == MINI ? 14 : 28, 220);
-            PlaySound(sfx[SFX_BOOM]);
+            playSfx(SFX_BOOM);
         }
         if (e.type == SPLITTER) pendingSplits.push_back(e.pos);
         return true;
@@ -2407,7 +2379,7 @@ struct Game {
         for (int i = 0; i < 18; ++i) { float ang = frand(0, 2 * PI), sp = frand(200, 500), life = frand(0.3f, 0.6f);
             parts.push_back({ at, { cosf(ang) * sp, sinf(ang) * sp }, life, life, frand(1.5f, 3), Color{ 255, 200, 120, 255 }, SPARK }); }
         shake = std::max(shake, 0.35f);
-        PlaySound(sfx[SFX_BOOM]); PlaySound(sfx[SFX_IMPACT]);
+        playSfx(SFX_BOOM); playSfx(SFX_IMPACT);
     }
 
     // The Courier shoots the basic form of what it carries (or of the player's weapon, if it carries an upgrade)
@@ -2426,7 +2398,7 @@ struct Game {
         }
         Color c = WCOL[w];
         parts.push_back({ from, { 0, 0 }, 0.15f, 0.15f, 18, c, FLASH });
-        PlaySound(sfx[SFX_DIVE]);
+        playSfx(SFX_DIVE);
     }
 
     // Ion Burst detonation: damages everything nearby; Lv3 chains lightning to up to 3 more enemies
@@ -2437,7 +2409,7 @@ struct Game {
         parts.push_back({ at, { 0, 0 }, 0.25f, 0.25f, r * 1.1f, Color{ 230, 200, 255, 255 }, FLASH });
         rings.push_back({ at, 0.3f, 0.3f, r, c });
         explode(at, c, WHITE, 16, 200);
-        PlaySound(sfx[SFX_IMPACT]);
+        playSfx(SFX_ION_BLAST);
         for (auto& e : enemies)
             if (e.state != DEAD && e.state != WAITING && Vector2Distance(e.pos, at) < r + 14) hitEnemy(e, at);
         for (size_t j = 0; j < eBullets.size();)              // the blast also clears missiles and rocks
@@ -2527,7 +2499,7 @@ struct Game {
         rings.push_back({ player, 0.6f, 0.6f, 120, Color{ c.r, c.g, c.b, 140 } });
         for (int i = 0; i < 24; ++i) { float ang = frand(0, 2 * PI), sp = frand(80, 220), life = frand(0.3f, 0.6f);
             parts.push_back({ player, { cosf(ang) * sp, sinf(ang) * sp }, life, life, frand(1.2f, 2.2f), c, SPARK }); }
-        PlaySound(sfx[SFX_SHIELD_UP]); PlaySound(sfx[SFX_LIFE]);
+        playSfx(SFX_SHIELD_UP); playSfx(SFX_LIFE);
     }
 
     void updatePackages(float dt) {
@@ -2611,7 +2583,7 @@ struct Game {
                 enemies.push_back(m);
                 startDive(enemies.back());
             }
-        if (!pendingSplits.empty()) PlaySound(sfx[SFX_HIT]);
+        if (!pendingSplits.empty()) playSfx(SFX_HIT);
         pendingSplits.clear();
     }
 
@@ -2627,7 +2599,7 @@ struct Game {
                 parts.push_back({ b.pos, { cosf(ang) * sp, sinf(ang) * sp }, life, life, frand(2, 3.5f), Color{ 130, 115, 100, 255 }, DEBRIS, frand(0, 360), frand(-600, 600) }); }
         } else explode(b.pos, Color{ 255, 170, 70, 255 }, WHITE, 14, 200);
         addScore(25);
-        PlaySound(sfx[SFX_IMPACT]);
+        playSfx(SFX_IMPACT);
     }
 
     void collisions() {
@@ -2643,7 +2615,7 @@ struct Game {
                     parts.push_back({ at, { 0, 0 }, 0.15f, 0.15f, 18, c, FLASH });
                     for (int q = 0; q < 6; ++q) { float ang = frand(0, 2 * PI), sp = frand(100, 240), life = frand(0.12f, 0.3f);
                         parts.push_back({ at, { cosf(ang) * sp, sinf(ang) * sp }, life, life, frand(1, 1.8f), c, SPARK }); }
-                    PlaySound(sfx[SFX_IMPACT]);
+                    playSfx(SFX_IMPACT);
                 }
             };
             for (auto& e : enemies) {
@@ -3500,7 +3472,7 @@ int main(int argc, char** argv) {
     SetRandomSeed((unsigned)std::time(nullptr));
 
     static Game game;
-    for (int i = 0; i < SFX_COUNT; ++i) game.sfx[i] = makeSound((SfxKind)i);
+    game.loadSfx();
     game.initStars();
     game.loadHiScore();
     game.loadFont();
@@ -3540,6 +3512,7 @@ int main(int argc, char** argv) {
         if (selftest && argc > 3 && std::string(argv[3]) == "break" && frame == shotFrame - 6 && game.shield) game.breakShield({ game.player.x, game.player.y - SHIELD_RADIUS });
         game.update(dt);
         if (game.quitRequested) break;
+        if (game.paused || game.escMenu || game.mode != PLAYING || !game.playerAlive) game.stopLaserLoop();   // beam hum never outlives the beam
         game.draw();
         if (selftest && getenv("SS_SEQ") && frame >= shotFrame - atoi(getenv("SS_SEQ"))) TakeScreenshot(TextFormat("seq%03d.png", frame));
         if (selftest && ++frame == shotFrame) { TakeScreenshot("selftest.png"); break; }
@@ -3548,7 +3521,7 @@ int main(int argc, char** argv) {
     if (game.score >= game.hiScore) game.saveHiScore();
     if (game.customFont) UnloadFont(game.font);
     gfx.unload();
-    for (auto& s : game.sfx) UnloadSound(s);
+    game.unloadSfx();
     CloseAudioDevice();
     CloseWindow();
     return 0;

@@ -1,6 +1,6 @@
 # Star Swarm — a Galaga-inspired shooter (C++17 / raylib)
 
-Single-file arcade shooter (renders at native resolution — resizable window, fullscreen, sharp text): formation fly-ins, sway/breathe formation, dive-bombing attacks, boss escorts, 2-hit bosses, synthesized sound, particle explosions, high-score saving. No asset files — ships and enemies are rendered at startup by a built-in per-pixel lighting renderer (`sprites.h`: SDF shapes + specular, fresnel rim, ambient occlusion, emissive bloom), and all audio is synthesized in code.
+Single-file arcade shooter (renders at native resolution — resizable window, fullscreen, sharp text): formation fly-ins, sway/breathe formation, dive-bombing attacks, boss escorts, 2-hit bosses, synthesized sound, particle explosions, high-score saving. No asset files — ships and enemies are rendered at startup by a built-in per-pixel lighting renderer (`sprites.h`: SDF shapes + specular, fresnel rim, ambient occlusion, emissive bloom), and all audio is synthesized in code (`sfxsynth.h`).
 
 ## Build
 
@@ -139,3 +139,11 @@ Extra ship at 20,000, then every 50,000. Each stage gets faster, with more simul
 ## GitHub auto-push
 
 Run `Code\tools\setup-autopush.cmd` once: it does the first push to https://github.com/GiladGlo/StarSwarm and creates a Windows scheduled task (*StarSwarm AutoPush*) that every 15 minutes commits any pending changes and pushes new commits, silently. Activity is logged in `autopush.log` (repo root, not committed). Remove with `schtasks /Delete /TN "StarSwarm AutoPush" /F`.
+
+## Sound
+
+All sound effects are synthesised at startup by `sfxsynth.h`, a small procedural sound engine. It builds bass-heavy, modern sounds from layers of pitch-dropping sub-bass, filtered noise, FM growl, saturation and a short reverb, at 44.1 kHz. Each sound can play up to 3 overlapping copies, so rapid fire and chained explosions don't cut each other off, and each has its own mix level.
+
+- **Weapons:** each has its own fire sound. The Photon Torpedo is a punchy sub thump with a plasma zap, the Spread Cannon a gritty triple-burst shotgun crack, and the Homing Swarm a launch thump, rocket whoosh and seeker chirps. The Ion Burst is a growling FM "vwoom" with electric crackle that lands with an electric thunderclap. The Pulse Laser hums with a looping bass beam and vents steam when it overheats.
+- **Explosions:** punchy enemy explosions, long rumbling detonations for bosses, volatile rocks and outposts, and a falling-tone version when your ship is destroyed.
+- **Everything else:** armour hits, torpedo impacts, the outpost flak cannon, shield up and break, stage and extra-life jingles, the boss alarm, enemy dives and the boss lance beam.
