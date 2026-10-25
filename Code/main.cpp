@@ -1887,6 +1887,9 @@ struct Game {
         }
     }
     void updateEscMenu() {
+        if (gameMuteVisible() && (IsKeyPressed(KEY_M) || (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(mouseLogical(), GAME_MUTE_BTN)))) {
+            toggleGameMusicMute(); return;   // music mute stays usable while the menu is open
+        }
         if (IsKeyPressed(KEY_UP) || IsKeyPressed(KEY_W) || IsKeyPressedRepeat(KEY_UP))     escSel = (escSel + ESC_N - 1) % ESC_N;
         if (IsKeyPressed(KEY_DOWN) || IsKeyPressed(KEY_S) || IsKeyPressedRepeat(KEY_DOWN)) escSel = (escSel + 1) % ESC_N;
         for (int i = 0; i < ESC_N; ++i) if (IsKeyPressed((KeyboardKey)(KEY_ONE + i)) || IsKeyPressed((KeyboardKey)(KEY_KP_1 + i))) { escChoose(i); return; }
@@ -3264,7 +3267,7 @@ struct Game {
         }
         for (auto& pk : packages) drawPackage(pk.content, pk.pos, 44, pk.t);
         drawHudShapes();
-        if (escMenu) drawEscMenuShapes();
+        if (escMenu) { drawEscMenuShapes(); if (gameMuteVisible()) drawGameMuteButton(); }   // mute button stays on top of the menu dimming
         EndMode2D();
 
         if (escMenu) { drawEscMenuText(); EndScissorMode(); EndDrawing(); return; }
