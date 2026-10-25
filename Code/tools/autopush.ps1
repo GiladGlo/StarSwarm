@@ -10,6 +10,15 @@ if (git status --porcelain) {
     git commit -q -m "Auto-save $(Get-Date -Format 'yyyy-MM-dd HH:mm')"
     Log 'committed pending changes'
 }
+# One-off force push after a history rewrite: create .git\force-push-once to trigger it (pushes main + tags, then removes the flag)
+$force = Join-Path $repo '.git\force-push-once'
+if (Test-Path $force) {
+    $o1 = (git push --force origin main 2>&1) -join ' '; $e1 = $LASTEXITCODE
+    $o2 = (git push --force origin --tags 2>&1) -join ' '; $e2 = $LASTEXITCODE
+    Log "force push main (exit $e1): $o1"
+    Log "force push tags (exit $e2): $o2"
+    if ($e1 -eq 0 -and $e2 -eq 0) { Remove-Item $force }
+}
 git fetch -q origin 2>$null
 $ahead = git rev-list --count 'origin/main..HEAD' 2>$null
 if ($LASTEXITCODE -ne 0 -or [int]$ahead -gt 0) {
