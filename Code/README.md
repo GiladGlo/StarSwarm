@@ -25,6 +25,8 @@ Linux needs X11/GL dev packages: `sudo apt install libx11-dev libxcursor-dev lib
 
 The titles **STAR SWARM**, **Developed by GILAD GLOBEN** and **Dedicated to DANIEL GLOBEN** are spelled by swarms of tiny animated monsters (Nebula Jellies, Void Mantas and Nova Urchins). Each swarm streams in from both sides along curved entry paths, holds as a gently breathing formation for a few seconds, then peels off left to right and dives away as the next swarm arrives (7 s per title).
 
+Below the titles, an **enemy roster** lists every regular enemy in a 4 × 2 grid, each with its animated sprite and points (formation / diving). The last cell, **BOSS**, rotates through all ten bosses, cross-fading every 1.6 s with each boss's number and name (5,000–50,000 points). Under the grid, a gold-framed **Courier** row shows its points and hit count, plus the five packages it can drop (Spread, Pulse, Homing, Ion and Upgrade), lighting up one at a time.
+
 ## Status bar
 
 The bottom of the screen is a status bar with four fixed areas, so indicators never overlap: **spare ships** (up to 4 icons, then one icon with a count, e.g. "x 8") · **weapon** (icon, level, laser heat) with a reserved slot for the **wingman drone** timer · **shield** state and recharge countdown · **stage** number and the campaign bar.

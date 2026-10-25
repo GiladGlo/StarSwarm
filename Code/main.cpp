@@ -71,6 +71,7 @@ struct Gfx {
     Texture2D planet[10]{};                            // one backdrop body per boss cycle
     bool planetLoaded[10]{};
     Texture2D bossTex[10]{};
+    Texture2D bossIcon[10]{};                          // small boss portraits for the title-screen roster
     std::vector<unsigned char> bossMask[10];          // alpha masks for pixel-accurate hit tests
     bool bossLoaded[10]{};
     void ensureBoss(int i) {
@@ -99,12 +100,14 @@ struct Gfx {
         struct Job { int k, f; };
         std::vector<Job> jobs;
         for (int k = 0; k < MON_COUNT; ++k) for (int f = 0; f < MON_FRAMES; ++f) jobs.push_back({ k, f });
+        for (int b = 0; b < 10; ++b) jobs.push_back({ MON_COUNT + b, 0 });   // title-roster boss portraits
         std::vector<Image> imgs(jobs.size());
         std::atomic<int> next{ 0 };
         auto worker = [&]() {
             for (int j; (j = next++) < (int)jobs.size();) {
                 Image out{}; spr::g_imgOut = &out;
                 float ph = (float)jobs[j].f / MON_FRAMES;
+                if (jobs[j].k >= MON_COUNT) { spr::bossShip(jobs[j].k - MON_COUNT, 192, nullptr); spr::g_imgOut = nullptr; imgs[j] = out; continue; }
                 switch (jobs[j].k) {
                     case MON_URCHIN:    spr::novaUrchin(MON_N, ph); break;
                     case MON_MANTA:     spr::voidManta(MON_N, ph); break;
@@ -124,7 +127,7 @@ struct Gfx {
         for (int i = 0; i < nt; ++i) pool.emplace_back(worker);
         for (auto& t : pool) t.join();
         for (size_t j = 0; j < jobs.size(); ++j) {
-            Texture2D& t = mon[jobs[j].k][jobs[j].f];
+            Texture2D& t = jobs[j].k >= MON_COUNT ? bossIcon[jobs[j].k - MON_COUNT] : mon[jobs[j].k][jobs[j].f];
             t = LoadTextureFromImage(imgs[j]);
             UnloadImage(imgs[j]);
             GenTextureMipmaps(&t);
@@ -137,6 +140,7 @@ struct Gfx {
         for (Texture2D* t : { &player, &glow, &nebula })
             UnloadTexture(*t);
         for (int i = 0; i < 10; ++i) if (bossLoaded[i]) UnloadTexture(bossTex[i]);
+        for (int i = 0; i < 10; ++i) UnloadTexture(bossIcon[i]);
         for (auto& m : meteor) UnloadTexture(m);
         for (Texture2D* t : { &courier[0], &courier[1], &drone, &outpost }) UnloadTexture(*t);
         for (int i = 0; i < 10; ++i) if (planetLoaded[i]) UnloadTexture(planet[i]);
@@ -3106,6 +3110,86 @@ struct Game {
         EndBlendMode();
     }
 
+    // ---- Title-screen enemy roster: 4x2 grid (7 monsters + rotating BOSS) and a featured Courier row ----
+    struct RosterEntry { int mon; const char* name; const char* pts; Color col; };
+    static const RosterEntry* roster() {
+        static const RosterEntry R[7] = {
+            { Gfx::MON_URCHIN,    "NOVA URCHIN",      "50 / 100",  { 255, 200, 80, 255 } },
+            { Gfx::MON_MANTA,     "VOID MANTA",       "80 / 160",  { 120, 150, 255, 255 } },
+            { Gfx::MON_JELLY,     "NEBULA JELLY",     "150 / 400", { 80, 230, 200, 255 } },
+            { Gfx::MON_IMP,       "COMET IMP",        "120 / 240", { 255, 120, 200, 255 } },
+            { Gfx::MON_BRUTE,     "ASTEROID BRUTE",   "150 / 300", { 255, 140, 60, 255 } },
+            { Gfx::MON_LEVIATHAN, "COSMIC LEVIATHAN", "100 / 200", { 170, 150, 255, 255 } },
+            { Gfx::MON_SPAWN,     "LEVIATHAN SPAWN",  "60",        { 120, 200, 255, 255 } } };
+        return R;
+    }
+    static constexpr float ROSTER_Y = 336, ROSTER_DY = 46, ROSTER_ICON = 40, ROSTER_BOSS_PER = 1.6f;
+    static constexpr Rectangle ROSTER_FEAT{ 30, 506, 540, 62 };
+    static Vector2 rosterCell(int k) { return { 62.0f + (k % 2) * 285, ROSTER_Y + (k / 2) * ROSTER_DY }; }   // icon centre
+    static Color rosterBossCol(int b) { const Vector3 c = spr::bossDesigns()[b].core;
+        return Color{ (unsigned char)(c.x * 255), (unsigned char)(c.y * 255), (unsigned char)(c.z * 255), 255 }; }
+    // which boss is showing, the next one, and the cross-fade amount between them
+    void rosterBossState(int& bi, int& bn, float& xf) const {
+        float u = time / ROSTER_BOSS_PER, fu = u - floorf(u); bi = (int)u % 10; bn = (bi + 1) % 10;
+        float t = std::clamp((fu - 0.8f) / 0.2f, 0.0f, 1.0f); xf = t * t * (3 - 2 * t);
+    }
+    int rosterDropLit() const { return (int)(time * 2.5f) % 5; }
+    Color rosterPodCol() const { int i = (int)fmodf(time * 0.8f, 6.0f); return i == 0 ? UPG_COL : WCOL[i < 5 ? i : 4]; }
+
+    void drawRosterShapes() {
+        for (int k = 0; k < 7; ++k)
+            drawMonster(gfx.mon[roster()[k].mon], Gfx::MON_FRAMES, time * 0.8f + k * 0.13f, rosterCell(k), ROSTER_ICON, 0);
+        // BOSS cell: all ten bosses in turn, cross-fading, each with a glow in its core colour
+        int bi, bn; float xf; rosterBossState(bi, bn, xf);
+        Vector2 bc = rosterCell(7); float pl = 0.7f + 0.3f * sinf(time * 4), bs = ROSTER_ICON * 1.3f;
+        for (int pass = 0; pass < 2; ++pass) {
+            int b = pass ? bn : bi; float a = pass ? xf : 1 - xf; if (a <= 0.01f) continue;
+            Color gc = rosterBossCol(b); gc.a = (unsigned char)(90 * a * pl);
+            BeginBlendMode(BLEND_ADDITIVE); drawGlow(bc, ROSTER_ICON * 0.75f, gc); EndBlendMode();
+            drawShip(gfx.bossIcon[b], bc, bs, 0, true, Color{ 255, 255, 255, (unsigned char)(255 * a) });
+        }
+        // featured Courier row
+        const Rectangle& r = ROSTER_FEAT; float fp = 0.6f + 0.4f * sinf(time * 3);
+        DrawRectangleRounded(r, 0.25f, 8, Color{ 40, 32, 10, 200 });
+        DrawRectangleRoundedLinesEx(r, 0.25f, 8, 1.6f, Color{ 255, 215, 60, (unsigned char)(150 + 80 * fp) });
+        Vector2 cp{ r.x + 40, r.y + 31 }; float cs = 50; Color pc = rosterPodCol();
+        drawShip(gfx.courier[0], cp, cs, 0);
+        float rr = cs * 0.08f; DrawCircleV({ cp.x, cp.y - 0.5f }, rr, pc);
+        BeginBlendMode(BLEND_ADDITIVE); drawGlow(cp, rr * 3.4f, Color{ pc.r, pc.g, pc.b, 210 }); EndBlendMode();
+        int lit = rosterDropLit();
+        for (int i = 0; i < 5; ++i) {
+            int content = i < 4 ? i + 1 : -1; Color col = content >= 0 ? WCOL[content] : UPG_COL;
+            Vector2 c{ r.x + 320 + i * 44.0f, r.y + 31 }; bool on = i == lit; float sz = on ? 32.5f : 26.0f;
+            BeginBlendMode(BLEND_ADDITIVE); drawGlow(c, sz * (on ? 1.2f : 0.8f), Color{ col.r, col.g, col.b, (unsigned char)(on ? 150 : 70) }); EndBlendMode();
+            DrawPoly(c, 6, sz * 0.62f, time * 40, Color{ 30, 30, 45, 255 });
+            DrawPolyLinesEx(c, 6, sz * 0.62f, time * 40, sz * 0.07f, col);
+            DrawCircleV(c, sz * 0.36f, Color{ (unsigned char)(col.r / 3), (unsigned char)(col.g / 3), (unsigned char)(col.b / 3), 255 });
+            weaponIcon(content >= 0 ? content : 5, c, sz * 0.5f, col);
+        }
+    }
+    void drawRosterText() {
+        drawCentered("POINTS:  FORMATION / DIVING", ROSTER_Y - 38, 13, Color{ 110, 120, 150, 255 });
+        for (int k = 0; k < 8; ++k) {
+            Vector2 c = rosterCell(k); float x = c.x + 30;
+            if (k < 7) {
+                text(roster()[k].name, x, c.y - 17, 15, roster()[k].col);
+                text(roster()[k].pts, x, c.y + 2, 17, Color{ 235, 235, 245, 255 });
+            } else {
+                text("BOSS", x, c.y - 17, 15, Color{ 255, 120, 190, 255 });
+                text("5000 - 50000", x, c.y + 2, 17, Color{ 235, 235, 245, 255 });
+                int bi, bn; float xf; rosterBossState(bi, bn, xf);
+                int b = xf > 0.5f ? bn : bi; float na = xf > 0 ? fabsf(xf - 0.5f) * 2 : 1;   // name dips out and back in mid-fade
+                Color nc = rosterBossCol(b);
+                nc = { (unsigned char)std::min(255, nc.r + 60), (unsigned char)std::min(255, nc.g + 60), (unsigned char)std::min(255, nc.b + 60), (unsigned char)(220 * na) };
+                text(TextFormat("%d/10  %s", b + 1, spr::bossDesigns()[b].name), x + 48, c.y - 14, 11, nc);
+            }
+        }
+        const Rectangle& r = ROSTER_FEAT;
+        text("COURIER", r.x + 75, r.y + 8, 17, Color{ 255, 215, 60, 255 });
+        text("500 PTS  .  8-12 HITS", r.x + 75, r.y + 30, 13, Color{ 235, 235, 245, 255 });
+        text("drops:", r.x + 260, r.y + 24, 12, Color{ 200, 190, 150, 255 });
+    }
+
     // HUD graphics (drawn inside the camera, in logical coordinates)
     void drawHudShapes() {
         if (mode == TITLE) {
@@ -3113,9 +3197,7 @@ struct Game {
             if (stageDialog) { drawStageDialogShapes(); return; }
             drawTitleParticles();
             (void)f;
-            drawMonster(gfx.mon[Gfx::MON_JELLY],  Gfx::MON_FRAMES, time * 0.45f, { W / 2.0f - 120, 340 }, 56, 0);
-            drawMonster(gfx.mon[Gfx::MON_MANTA],  Gfx::MON_FRAMES, time * 0.9f + 0.3f, { W / 2.0f - 120, 400 }, 46, 0);
-            drawMonster(gfx.mon[Gfx::MON_URCHIN], Gfx::MON_FRAMES, time * 0.55f + 0.6f, { W / 2.0f - 120, 460 }, 42, 0);
+            drawRosterShapes();
             return;
         }
         if (mode == PLAYING || mode == VICTORY || mode == GAMEOVER) drawStatusPanel();
@@ -3196,11 +3278,8 @@ struct Game {
         if (mode == TITLE && stageDialog) { drawStageDialogText(); return; }
         if (mode == TITLE) {
             drawTitleText();
-            text("150 / 400", W / 2.0f - 60, 328, 22, GREEN);
-            text(" 80 / 160", W / 2.0f - 60, 388, 22, RED);
-            text(" 50 / 100", W / 2.0f - 60, 448, 22, YELLOW);
-            text("formation / diving", W / 2.0f - 60, 490, 14, DARKGRAY);
-            if (fmodf(time, 1.0f) < 0.6f) drawCentered("PRESS SPACE TO START", 570, 26, RAYWHITE);
+            drawRosterText();
+            if (fmodf(time, 1.0f) < 0.6f) drawCentered("PRESS SPACE TO START", 584, 26, RAYWHITE);
             drawCentered("ARROWS / WASD  move    SPACE  fire    P / ESC  pause", 640, 16, GRAY);
             drawCentered("F11 / ALT+ENTER  fullscreen", 664, 16, GRAY);
             drawCentered(TextFormat("HIGH SCORE  %d", hiScore), 710, 22, GOLD);
@@ -3325,6 +3404,7 @@ int main(int argc, char** argv) {
         int st = (argc > 3 && isdigit((unsigned char)argv[3][0])) ? atoi(argv[3]) : 1;
         if (argc > 3 && std::string(argv[3]) == "boss") st = CYCLE;
         if (argc > 3 && std::string(argv[3]) == "dialog") { game.stageDialog = true; game.dlgText = "35"; }
+        else if (argc > 3 && std::string(argv[3]) == "title") { /* stay on the title screen */ }
         else { game.debugRun = st != 1; game.newGame(st); }
         if (argc > 4) { game.boss.hp = std::min(game.boss.hp, (float)atof(argv[4])); }   // optional: cap boss HP
     }
