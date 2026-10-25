@@ -23,7 +23,7 @@ Linux needs X11/GL dev packages: `sudo apt install libx11-dev libxcursor-dev lib
 
 ## Title screen
 
-The title rotates between **STAR SWARM**, **Developed by Gilad Globen** and **Dedicated to Daniel Globen**. Each one holds for 5 s, becomes unstable for 2 s (tremor, glitch slices, colour split, sparks), blows apart into particles that fly off screen (2 s), and the same particles fly back and form the next title (2 s).
+The titles **STAR SWARM**, **Developed by Gilad Globen** and **Dedicated to Daniel Globen** are spelled by swarms of tiny animated monsters (Nebula Jellies, Void Mantas and Nova Urchins). Each swarm streams in from both sides along curved entry paths, holds as a gently breathing formation for a few seconds, then peels off left to right and dives away as the next swarm arrives (7 s per title).
 
 ## Status bar
 

@@ -2610,201 +2610,102 @@ struct Game {
     }
 
 
-    // ======================================================== TITLE CAROUSEL ==
-    // Three rotating titles. Cycle per title (11 s): hold 5 s -> instability 2 s ->
-    // blow apart into particles 2 s -> particles fly back and form the next title 2 s.
-    struct TitleLine  { const char* text; float y, size; Color col; };
-    struct TitleCard  { std::vector<TitleLine> lines; };
-    struct TitleDot   { Vector2 home; Color col; };
-    static constexpr float T_HOLD = 5, T_UNSTABLE = 2, T_BLOW = 2, T_FORM = 2;
-    static constexpr float T_CARD = T_HOLD + T_UNSTABLE + T_BLOW + T_FORM;
-    static constexpr float DOT = 2.6f;                         // particle spacing / size (logical units)
-    std::vector<TitleCard> cards = {
-        { { { "STAR SWARM", 168, 64, Color{ 255, 70, 90, 255 } } } },
-        { { { "DEVELOPED BY", 152, 22, Color{ 150, 200, 255, 255 } }, { "GILAD GLOBEN", 184, 50, Color{ 90, 190, 255, 255 } } } },
-        { { { "DEDICATED TO", 152, 22, Color{ 255, 225, 160, 255 } }, { "DANIEL GLOBEN", 184, 50, Color{ 255, 195, 70, 255 } } } },
-    };
-    std::vector<std::vector<TitleDot>> cardDots;               // sampled pixel targets per card
-    std::vector<std::vector<int>>      dotMap;                 // particle i -> target index, per card
-    std::vector<std::vector<Vector2>>  dotOut;                 // particle i -> off-screen point, per card
-    std::vector<float> dotDelay, dotCurve;
-    int   nDots = 0;
+    // ======================================================== TITLE SWARM ==
+    // Three rotating titles spelled by swarms of tiny animated monsters. Per title (7 s): the swarm streams in
+    // from both sides along curved entry paths (outer letters first), holds as a gently breathing formation,
+    // then peels off left to right and dives away; the next swarm follows.
+    struct SwarmMon { Vector2 tgt, in0, in1, in2, out1, out2, out3; float dIn, dOut, ph; int kind; };
+    struct SwarmTitle { const char* label; std::vector<SwarmMon> mons; };
+    static constexpr float SW_CYCLE = 7.0f, SW_IN = 1.8f, SW_OUT_AT = 5.0f, SW_OUT = 1.3f;
+    std::vector<SwarmTitle> swarmTitles;
     float titleT = 0;
+    Font  swarmFont{}; bool swarmFontOwn = false;   // a heavy sans font gives the swarm thick, readable letters
 
-    float lineSpacing(float fs) const { return customFont ? fs * 0.04f : fs / 10; }
-
-    void buildTitleParticles() {
-        cardDots.clear();
-        const float K = 4;                                     // oversample when rasterising the text
-        for (auto& card : cards) {
-            std::vector<TitleDot> dots;
-            for (auto& L : card.lines) {
-                float fs = L.size * K;
-                Image img = ImageTextEx(font, L.text, fs, lineSpacing(fs), WHITE);
-                float w = img.width / K, x0 = W / 2.0f - w / 2;
-                Color* px = LoadImageColors(img);
-                for (float y = DOT / 2; y < img.height / K; y += DOT)
-                    for (float x = DOT / 2; x < w; x += DOT) {
-                        int ix = (int)(x * K), iy = (int)(y * K);
-                        if (ix >= img.width || iy >= img.height) continue;
-                        if (px[iy * img.width + ix].a > 120) dots.push_back({ { x0 + x, L.y + y }, L.col });
-                    }
-                UnloadImageColors(px);
-                UnloadImage(img);
-            }
-            cardDots.push_back(dots);
-        }
-        nDots = 0;
-        for (auto& d : cardDots) nDots = std::max(nDots, (int)d.size());
-        dotMap.assign(cards.size(), std::vector<int>(nDots));
-        dotOut.assign(cards.size(), std::vector<Vector2>(nDots));
-        dotDelay.resize(nDots); dotCurve.resize(nDots);
-        for (size_t k = 0; k < cards.size(); ++k) {
-            int cnt = (int)cardDots[k].size();
-            std::vector<int> perm(nDots);
-            for (int i = 0; i < nDots; ++i) perm[i] = i % cnt;
-            for (int i = nDots - 1; i > 0; --i) std::swap(perm[i], perm[GetRandomValue(0, i)]);   // particles swap places between cards
-            dotMap[k] = perm;
-            for (int i = 0; i < nDots; ++i) {
-                Vector2 h = cardDots[k][perm[i]].home;
-                Vector2 c{ W / 2.0f, 190 };
-                float ang = atan2f(h.y - c.y, h.x - c.x) + frand(-0.6f, 0.6f);
-                float dist = frand(700, 1100);
-                dotOut[k][i] = { c.x + cosf(ang) * dist, c.y + sinf(ang) * dist };
-            }
-        }
-        for (int i = 0; i < nDots; ++i) { dotDelay[i] = frand(0, 1); dotCurve[i] = frand(-90, 90); }
+    static Vector2 bez3(Vector2 a, Vector2 b, Vector2 c, Vector2 d, float t) {
+        float u = 1 - t;
+        return { u * u * u * a.x + 3 * u * u * t * b.x + 3 * u * t * t * c.x + t * t * t * d.x,
+                 u * u * u * a.y + 3 * u * u * t * b.y + 3 * u * t * t * c.y + t * t * t * d.y };
     }
-
-    // Particle phase drawing (logical coordinates, inside the camera)
-    void drawTitleParticles() {
-        if (cardDots.empty()) return;
-        int nC = (int)cards.size();
-        float T = fmodf(titleT, T_CARD * nC);
-        int k = (int)(T / T_CARD);
-        float u = T - k * T_CARD;
-        float blow0 = T_HOLD + T_UNSTABLE, form0 = blow0 + T_BLOW;
-        if (u < blow0) return;
-        int nk = (k + 1) % nC;
-        auto ease3in  = [](float x) { return x * x * x; };
-        auto ease3out = [](float x) { float y = 1 - x; return 1 - y * y * y; };
-        Vector2 c{ W / 2.0f, 190 };
-
-        if (u < form0) {                                       // ---- blowing apart
-            float e = (u - blow0) / T_BLOW;
-            BeginBlendMode(BLEND_ADDITIVE);
-            if (e < 0.25f) {                                   // detonation flash + shockwave
-                float f = 1 - e / 0.25f;
-                drawGlow(c, 260 * (0.6f + e), Color{ 255, 230, 200, (unsigned char)(160 * f) });
-                DrawRing(c, 40 + e * 900, 44 + e * 900 + 6 * f, 0, 360, 64, Color{ 255, 220, 180, (unsigned char)(200 * f) });
-            }
-            EndBlendMode();
-            for (int i = 0; i < nDots; ++i) {
-                const TitleDot& d = cardDots[k][dotMap[k][i]];
-                float r = Vector2Distance(d.home, c) / 300.0f;
-                float del = 0.18f * std::min(1.0f, r) + 0.07f * dotDelay[i];       // blast ripples outward
-                float l = std::clamp((e - del) / (1 - del), 0.0f, 1.0f);
-                Vector2 p = Vector2Lerp(d.home, dotOut[k][i], ease3in(l));
-                p.y += sinf(l * PI) * dotCurve[i] * 0.3f;
-                float heat = std::max(0.0f, 1 - l * 3);           // white-hot at first, cooling to its colour
-                Color col = ColorLerp(d.col, WHITE, heat * 0.7f);
-                float sz = DOT * (1 + 0.6f * heat);
-                DrawRectanglePro({ p.x, p.y, sz, sz }, { sz / 2, sz / 2 }, l * 720 + i * 37, col);
-            }
-            BeginBlendMode(BLEND_ADDITIVE);
-            for (int i = 0; i < nDots; i += 9) {
-                const TitleDot& d = cardDots[k][dotMap[k][i]];
-                float r = Vector2Distance(d.home, c) / 300.0f;
-                float del = 0.18f * std::min(1.0f, r) + 0.07f * dotDelay[i];
-                float l = std::clamp((e - del) / (1 - del), 0.0f, 1.0f);
-                Vector2 p = Vector2Lerp(d.home, dotOut[k][i], ease3in(l));
-                p.y += sinf(l * PI) * dotCurve[i] * 0.3f;
-                drawGlow(p, 7, Color{ d.col.r, d.col.g, d.col.b, (unsigned char)(140 * (1 - l * 0.5f)) });
-            }
-            EndBlendMode();
-            return;
+    // Rasterise the lines and place one monster on every grid point inside the letters.
+    std::vector<SwarmMon> buildSwarm(std::vector<std::pair<const char*, float>> lines, float yTop) {
+        std::vector<SwarmMon> out; float y = yTop; int lineNo = 0;
+        for (auto& [str, sz] : lines) {
+            float sp = sz * 0.08f;
+            Image im = ImageTextEx(swarmFont, str, sz, sp, WHITE);
+            int iw = im.width, ih = im.height;
+            Color* px = LoadImageColors(im);
+            float step = sz > 88 ? 8.5f : 7.0f, x0 = W / 2.0f - iw / 2.0f;
+            for (float yy = step / 2; yy < ih; yy += step)
+                for (float xx = step / 2; xx < iw; xx += step) {
+                    if (px[(int)yy * iw + (int)xx].a <= 140) continue;
+                    SwarmMon m;
+                    m.tgt = { x0 + xx, y + yy };
+                    float side = m.tgt.x < W / 2 ? -1.f : 1.f;
+                    m.in0 = { W / 2 + side * (W / 2 + 60), frand(-60, 120) };
+                    m.in1 = { W / 2 - side * frand(60, 200), frand(330, 480) };
+                    m.in2 = { m.tgt.x + side * frand(40, 120), m.tgt.y + frand(80, 160) };
+                    float s2 = frand(0, 1) < 0.5f ? -1.f : 1.f;
+                    m.out1 = { m.tgt.x + s2 * frand(30, 70), m.tgt.y - frand(20, 50) };
+                    m.out2 = { m.tgt.x + s2 * frand(100, 180), m.tgt.y + frand(180, 300) };
+                    m.out3 = { m.tgt.x + s2 * frand(20, 90), H + 60.0f };
+                    m.dIn  = fabsf(m.tgt.x - W / 2) / (W / 2) * 0.9f + frand(0, 0.15f);   // outer letters fill first
+                    m.dOut = (m.tgt.x / W) * 0.7f + frand(0, 0.15f);                       // peel off left to right
+                    m.kind = lineNo == 0 ? (yy < ih * 0.45f ? Gfx::MON_JELLY : Gfx::MON_MANTA) : Gfx::MON_URCHIN;
+                    m.ph = frand(0, 1);
+                    out.push_back(m);
+                }
+            UnloadImageColors(px); UnloadImage(im);
+            y += ih + 4; ++lineNo;
         }
-        // ---- re-forming as the next card: the same particles fly back in from where they went
-        float a = (u - form0) / T_FORM;
-        float fadeOut = a > 0.9f ? 1 - (a - 0.9f) / 0.1f : 1;  // hand over to the crisp text at the very end
-        for (int i = 0; i < nDots; ++i) {
-            const TitleDot& from = cardDots[k][dotMap[k][i]];
-            const TitleDot& to = cardDots[nk][dotMap[nk][i]];
-            float del = 0.15f * dotDelay[i];
-            float l = std::clamp((a - del) / 0.82f, 0.0f, 1.0f);
-            float el = ease3out(l);
-            Vector2 st = dotOut[k][i];
-            Vector2 p = Vector2Lerp(st, to.home, el);
-            Vector2 dir = Vector2Normalize(Vector2Subtract(to.home, st));
-            p = Vector2Add(p, Vector2Scale({ -dir.y, dir.x }, sinf(el * PI) * dotCurve[i]));   // swirl in on a curve
-            Color col = ColorLerp(from.col, to.col, std::min(1.0f, l * 1.5f));
-            col.a = (unsigned char)(255 * fadeOut);
-            float spin = (1 - el) * 540 + i * 37 * (1 - el);
-            DrawRectanglePro({ p.x, p.y, DOT, DOT }, { DOT / 2, DOT / 2 }, spin, col);
+        return out;
+    }
+    void buildTitleParticles() {
+        swarmTitles.clear();
+        swarmFont = font;
+        for (const char* f : { "C:/Windows/Fonts/arialbd.ttf", "C:/Windows/Fonts/segoeuib.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+                               "/System/Library/Fonts/Supplemental/Arial Bold.ttf" })
+            if (FileExists(f)) { Font ft = LoadFontEx(f, 112, nullptr, 0); if (ft.texture.id) { swarmFont = ft; swarmFontOwn = true; break; } }
+        swarmTitles.push_back({ nullptr, buildSwarm({ { "STAR", 92 }, { "SWARM", 92 } }, 70) });
+        swarmTitles.push_back({ "DEVELOPED BY", buildSwarm({ { "Gilad", 86 }, { "Globen", 86 } }, 90) });
+        swarmTitles.push_back({ "DEDICATED TO", buildSwarm({ { "Daniel", 86 }, { "Globen", 86 } }, 90) });
+    }
+    static float swEase(float a, float b, float x) { float t = Clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); }
+    void drawTitleParticles() {                    // the swarm itself (logical coordinates, inside the camera)
+        if (swarmTitles.empty()) return;
+        int ti = (int)(titleT / SW_CYCLE) % (int)swarmTitles.size();
+        float t = fmodf(titleT, SW_CYCLE);
+        const SwarmTitle& T = swarmTitles[ti];
+        float breathe = 1 + 0.015f * sinf(time * 2.2f), sway = 6 * sinf(time * 1.1f);
+        static std::vector<std::pair<Vector2, const SwarmMon*>> vis;
+        vis.clear();
+        for (const auto& m : T.mons) {
+            if (t < m.dIn) continue;
+            Vector2 home{ W / 2 + (m.tgt.x - W / 2) * breathe + sway, m.tgt.y };
+            float uIn = swEase(0, SW_IN, t - m.dIn), uOut = Clamp((t - SW_OUT_AT - m.dOut) / SW_OUT, 0, 1);
+            Vector2 p = uOut > 0 ? bez3(home, m.out1, m.out2, m.out3, uOut * uOut) : (uIn < 1 ? bez3(m.in0, m.in1, m.in2, home, uIn) : home);
+            vis.push_back({ p, &m });
         }
         BeginBlendMode(BLEND_ADDITIVE);
-        for (int i = 0; i < nDots; i += 9) {
-            const TitleDot& to = cardDots[nk][dotMap[nk][i]];
-            float l = std::clamp((a - 0.15f * dotDelay[i]) / 0.82f, 0.0f, 1.0f);
-            float el = ease3out(l);
-            Vector2 st = dotOut[k][i];
-            Vector2 p = Vector2Lerp(st, to.home, el);
-            Vector2 dir = Vector2Normalize(Vector2Subtract(to.home, st));
-            p = Vector2Add(p, Vector2Scale({ -dir.y, dir.x }, sinf(el * PI) * dotCurve[i]));
-            drawGlow(p, 7, Color{ to.col.r, to.col.g, to.col.b, (unsigned char)(120 * (1 - el) * fadeOut) });
+        for (auto& [p, m] : vis) {
+            Color gc = m->kind == Gfx::MON_JELLY ? Color{ 80, 230, 200, 85 } : m->kind == Gfx::MON_MANTA ? Color{ 120, 150, 255, 85 } : Color{ 255, 200, 80, 85 };
+            drawGlow(p, 8, gc);
         }
-        if (a > 0.85f) drawGlow(c, 220, Color{ 255, 255, 255, (unsigned char)(90 * sinf((a - 0.85f) / 0.15f * PI)) });  // "snap" flash as it locks
         EndBlendMode();
+        for (auto& [p, m] : vis) {
+            int f = (int)(fmodf(time * 0.9f + m->ph, 1.f) * Gfx::MON_FRAMES) % Gfx::MON_FRAMES;
+            const Texture2D& tx = gfx.mon[m->kind][f];
+            float S = m->tgt.y > 0 && T.label ? (m->kind == Gfx::MON_URCHIN ? 10.5f : 11.5f) : (m->kind == Gfx::MON_URCHIN ? 12 : 13);
+            DrawTexturePro(tx, { 0, 0, (float)tx.width, (float)tx.height }, { p.x, p.y, S, S }, { S / 2, S / 2 }, 0, WHITE);
+        }
     }
-
-    // Crisp text phases: steady hold, then the 2 s instability (screen space)
-    void drawTitleText() {
-        int nC = (int)cards.size();
-        float T = fmodf(titleT, T_CARD * nC);
-        int k = (int)(T / T_CARD);
-        float u = T - k * T_CARD;
-        float blow0 = T_HOLD + T_UNSTABLE, form0 = blow0 + T_BLOW;
-        int show = -1; float alpha = 1, inst = 0;
-        if (u < T_HOLD) show = k;
-        else if (u < blow0) { show = k; inst = (u - T_HOLD) / T_UNSTABLE; }
-        else if (u >= form0 + T_FORM * 0.9f) { show = (k + 1) % nC; alpha = (u - form0 - T_FORM * 0.9f) / (T_FORM * 0.1f); }
-        if (show < 0) return;
-        const TitleCard& card = cards[show];
-        if (inst <= 0) {
-            for (auto& L : card.lines) { Color c = L.col; c.a = (unsigned char)(255 * alpha); drawCentered(L.text, L.y, L.size, c); }
-            return;
-        }
-        // ---- instability: tremor, chromatic split, glitch slices, flicker, rising glow and sparks
-        float k2 = inst * inst;
-        if (GetRandomValue(0, 100) < (int)(30 * inst)) {
-            const auto& dots = cardDots[show];
-            const TitleDot& d = dots[GetRandomValue(0, (int)dots.size() - 1)];
-            float ang = frand(0, 2 * PI), sp = frand(40, 160) * inst, life = frand(0.2f, 0.5f);
-            parts.push_back({ d.home, { cosf(ang) * sp, sinf(ang) * sp }, life, life, frand(1, 2), d.col, SPARK });
-        }
-        bool flick = inst > 0.5f && GetRandomValue(0, 100) < (int)(25 * k2);
-        float shake = 0.6f + 6 * k2;
-        float split = 1.5f + 7 * k2;
-        int sx = (int)origin.x, sw = (int)ceilf(W * scale);
-        for (auto& L : card.lines) {
-            float top = L.y, h = L.size * 1.1f;
-            int bands = 7;
-            for (int b = 0; b < bands; ++b) {
-                float by = top + h * b / bands, bh = h / bands + 1;
-                bool glitch = GetRandomValue(0, 100) < (int)(70 * k2);
-                float off = frand(-shake, shake) + (glitch ? frand(-1, 1) * 26 * k2 : 0);
-                float oy = frand(-shake, shake) * 0.5f;
-                BeginScissorMode(sx, (int)(origin.y + by * scale), sw, (int)ceilf(bh * scale) + 1);
-                Color base = L.col;
-                if (flick) base = ColorLerp(base, WHITE, 0.6f);
-                BeginBlendMode(BLEND_ADDITIVE);
-                text(L.text, 0, L.y + oy, L.size, Color{ 255, 40, 60, (unsigned char)(150 * inst) }, true, off - split);
-                text(L.text, 0, L.y + oy, L.size, Color{ 40, 200, 255, (unsigned char)(150 * inst) }, true, off + split);
-                EndBlendMode();
-                text(L.text, 0, L.y + oy, L.size, base, true, off);
-            }
-            BeginScissorMode((int)origin.x, (int)origin.y, (int)ceilf(W * scale), (int)ceilf(H * scale));
-        }
+    void drawTitleText() {                         // the small "DEVELOPED BY" / "DEDICATED TO" labels (screen space)
+        if (swarmTitles.empty()) return;
+        int ti = (int)(titleT / SW_CYCLE) % (int)swarmTitles.size();
+        float t = fmodf(titleT, SW_CYCLE);
+        const char* label = swarmTitles[ti].label;
+        if (!label) return;
+        float a = swEase(1.2f, 2.0f, t) * (1 - swEase(4.8f, 5.4f, t));
+        drawCentered(label, 62, 20, Color{ 170, 200, 255, (unsigned char)(255 * a) });
     }
 
     // --- view / scaling -------------------------------------------------------
