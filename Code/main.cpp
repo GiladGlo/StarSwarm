@@ -2441,9 +2441,7 @@ struct Game {
 
     // Weapon status: compact indicator in the bottom HUD strip, after the spare-ship icons (never over the player)
     void drawWeaponIndicator() {
-        int n = std::max(0, lives - (playerAlive ? 1 : 0));
-        float x = n > 0 ? 41 + (n - 1) * 34 + 8.0f : 12;
-        Vector2 o{ x, H - 34.0f };
+        Vector2 o{ SB_WEAPON_X, H - 33.0f };
         Color col = WCOL[weapon];
         DrawRectangleRounded({ o.x, o.y, 64, 24 }, 0.35f, 6, Color{ 10, 12, 28, 200 });
         DrawRectangleRoundedLinesEx({ o.x, o.y, 64, 24 }, 0.35f, 6, 1.0f, Color{ col.r, col.g, col.b, 170 });
@@ -3211,8 +3209,11 @@ struct Game {
             drawMonster(gfx.mon[Gfx::MON_URCHIN], Gfx::MON_FRAMES, time * 0.55f + 0.6f, { W / 2.0f - 120, 460 }, 42, 0);
             return;
         }
-        for (int i = 0; i < std::max(0, lives - (playerAlive ? 1 : 0)); ++i)
-            drawShip(gfx.player, { 26.0f + i * 34, H - 22.0f }, 30, 0, false);
+        if (mode == PLAYING || mode == VICTORY || mode == GAMEOVER) drawStatusPanel();
+        {   int spare = std::max(0, lives - (playerAlive ? 1 : 0));
+            if (spare <= 4) for (int i = 0; i < spare; ++i) drawShip(gfx.player, { SB_LIVES_X + 15 + i * 28.0f, H - 21.0f }, 26, 0, false);
+            else drawShip(gfx.player, { SB_LIVES_X + 15, H - 21.0f }, 26, 0, false);   // "x N" label drawn with the HUD text
+        }
         if (mode == PLAYING || mode == VICTORY) drawWeaponIndicator();
         if (mode == PLAYING || mode == VICTORY || mode == GAMEOVER) drawCampaignBar();
         if (boss.active && boss.state != B_ENTER) {
@@ -3230,7 +3231,7 @@ struct Game {
             if (f > 0) DrawRectangleRounded({ x, y, bw * f, 6 }, 0.5f, 6, Color{ 220, 150, 70, 255 });
         }
         if (mode == PLAYING && playerAlive && !shield && shieldRegen > 0) {   // shield recharge bar under the label
-            float f = 1 - shieldRegen / SHIELD_REGEN_TIME, bw = 76, x = W / 2.0f - bw / 2, y = H - 9.0f;
+            float f = 1 - shieldRegen / SHIELD_REGEN_TIME, bw = 76, x = SB_SHIELD_CX - bw / 2, y = H - 13.0f;
             DrawRectangleRounded({ x, y, bw, 3.5f }, 1, 6, Color{ 40, 30, 36, 220 });
             DrawRectangleRounded({ x, y, std::max(3.5f, bw * f), 3.5f }, 1, 6, Color{ (unsigned char)(140 - 30 * f), (unsigned char)(90 + 120 * f), (unsigned char)(90 + 165 * f), 255 });
         }
@@ -3239,7 +3240,20 @@ struct Game {
     }
 
     // Campaign bar (bottom right): progress through all 60 stages, one crest per boss (gold once defeated).
-    static constexpr float CB_X0 = 430, CB_X1 = 590, CB_Y = H - 18.0f;
+    // ---- bottom status bar: fixed zones so indicators never overlap
+    //  [ spare ships | weapon + drone | shield | stage / campaign bar ]
+    static constexpr float SB_TOP = H - 42.0f;
+    static constexpr float SB_LIVES_X = 8, SB_WEAPON_X = 134, SB_SHIELD_CX = 337, SB_SEP[3] = { 127, 266, 410 };
+    static constexpr float CB_X0 = 420, CB_X1 = 590, CB_Y = H - 14.0f;
+    void textCenteredAt(const char* t, float cx, float y, float size, Color c) {
+        float fs = size * scale, sp = customFont ? fs * 0.04f : fs / 10;
+        text(t, cx - MeasureTextEx(font, t, fs, sp).x / scale / 2, y, size, c);
+    }
+    void drawStatusPanel() {
+        DrawRectangle(0, (int)SB_TOP, W, H - (int)SB_TOP, Color{ 6, 8, 20, 170 });
+        DrawLineEx({ 0, SB_TOP }, { (float)W, SB_TOP }, 1, Color{ 80, 100, 150, 110 });
+        for (float x : SB_SEP) DrawLineEx({ x, SB_TOP + 7 }, { x, H - 6.0f }, 1, Color{ 70, 80, 110, 110 });
+    }
     void drawCrest(Vector2 c, float r, Color fill, Color line) {
         Vector2 v[8] = { { c.x - r, c.y - r * 0.7f }, { c.x - r * 0.45f, c.y - r * 0.25f }, { c.x, c.y - r * 0.9f }, { c.x + r * 0.45f, c.y - r * 0.25f },
                          { c.x + r, c.y - r * 0.7f }, { c.x + r * 0.75f, c.y + r * 0.35f }, { c.x, c.y + r }, { c.x - r * 0.75f, c.y + r * 0.35f } };
@@ -3287,16 +3301,18 @@ struct Game {
 
         text("1UP", 20, 10, 18, RED);
         if (droneOn && playerAlive && (mode == PLAYING || mode == VICTORY)) {   // drone timer label
-            int n = std::max(0, lives - 1);
-            float dx = (n > 0 ? 41 + (n - 1) * 34 + 8.0f : 12) + 70;
-            text(TextFormat("DRONE %d", (int)ceilf(droneT)), dx + 6, H - 32, 10, Color{ 170, 255, 190, 255 });
+            text(TextFormat("DRONE %d", (int)ceilf(droneT)), SB_WEAPON_X + 70 + 6, H - 31, 10, Color{ 170, 255, 190, 255 });
         }
         if (mode == PLAYING || mode == VICTORY || mode == GAMEOVER) {   // campaign bar labels
-            text(TextFormat("STAGE %d", mode == VICTORY ? FINAL_STAGE : stage), CB_X0, H - 44, 12, RAYWHITE);
-            text(TextFormat("/ %d", FINAL_STAGE), CB_X1 - 38, H - 41, 9, Color{ 150, 160, 190, 255 });
+            text(TextFormat("STAGE %d", mode == VICTORY ? FINAL_STAGE : stage), CB_X0, H - 37, 12, RAYWHITE);
+            text(TextFormat("/ %d", FINAL_STAGE), CB_X1 - 32, H - 35, 9, Color{ 150, 160, 190, 255 });
+        }
+        if (mode == PLAYING || mode == VICTORY || mode == GAMEOVER) {   // spare-ship count when there are more than 4
+            int spare = std::max(0, lives - (playerAlive ? 1 : 0));
+            if (spare > 4) text(TextFormat("x %d", spare), SB_LIVES_X + 32, H - 30, 15, RAYWHITE);
         }
         if (mode == PLAYING && playerAlive)
-            drawCentered(shield ? "SHIELD" : shieldRegen > 0 ? TextFormat("SHIELD  %d", (int)ceilf(shieldRegen)) : "SHIELD DOWN", H - 28, 16,
+            textCenteredAt(shield ? "SHIELD" : shieldRegen > 0 ? TextFormat("SHIELD  %d", (int)ceilf(shieldRegen)) : "SHIELD DOWN", SB_SHIELD_CX, H - 33, 15,
                  shield ? Color{ 110, 210, 255, 255 } : Color{ 140, 90, 90, 255 });
         text(TextFormat("%d", score), 20, 30, 22, RAYWHITE);
         drawCentered("HIGH SCORE", 10, 18, RED);

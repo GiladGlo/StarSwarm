@@ -25,6 +25,10 @@ Linux needs X11/GL dev packages: `sudo apt install libx11-dev libxcursor-dev lib
 
 The title rotates between **STAR SWARM**, **Developed by Gilad Globen** and **Dedicated to Daniel Globen**. Each one holds for 5 s, becomes unstable for 2 s (tremor, glitch slices, colour split, sparks), blows apart into particles that fly off screen (2 s), and the same particles fly back and form the next title (2 s).
 
+## Status bar
+
+The bottom of the screen is a status bar with four fixed areas, so indicators never overlap: **spare ships** (up to 4 icons, then one icon with a count, e.g. "x 8") · **weapon** (icon, level, laser heat) with a reserved slot for the **wingman drone** timer · **shield** state and recharge countdown · **stage** number and the campaign bar.
+
 ## Controls
 
 | Key | Action |
