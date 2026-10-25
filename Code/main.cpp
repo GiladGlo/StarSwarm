@@ -1244,9 +1244,9 @@ struct Game {
         if (b.attack == A_NONE) b.attackTimer = (1.5f - 0.35f * ph) / std::min(diff, 1.6f) / ag;
     }
 
-    void damageBoss(Vector2 at) {
+    void damageBoss(Vector2 at, float amount = 1.0f) {   // amount: spread pellet 0.5, homing 0.75, laser tick 2, ion direct hit 3
         Boss& b = boss;
-        b.hp -= 1; b.flash = 0.07f;
+        b.hp -= amount; b.flash = 0.07f;
         addScore(10);
         if (b.hp <= 0) {
             b.state = B_DYING; b.dyingT = 0; b.emitT = 0; b.attack = A_NONE; b.step = 0;
@@ -1942,7 +1942,7 @@ struct Game {
         bool trigger = IsKeyDown(KEY_SPACE) || autoFire;   // hold to keep firing
         laserOn = false;
         if (weapon == W_PULSE) {
-            static const float rate[4] = { 0.5f, 0.42f, 0.36f, 0.3f };   // heat per second of firing (~2 s at Lv0)
+            static const float rate[4] = { 0.4f, 0.34f, 0.29f, 0.24f };   // heat per second of firing (~2.5 s at Lv0)
             if (trigger && !overheated) {
                 laserOn = true;
                 heat += rate[wlevel] * dt;
@@ -2055,11 +2055,12 @@ struct Game {
         }
     }
 
+    static constexpr float SPREAD_LIFE = 0.70f;   // Spread Cannon pellet range (620 px/s -> ~430 px): fly up to reach the top rows / boss
     void updateBullets(float dt) {
         for (auto& b : pBullets) {
             b.age += dt;
             if (b.kind == PB_HOMING || b.kind == PB_DRONE) {   // steer toward the nearest target
-                static const float turnR[4] = { 3.5f, 5.0f, 5.0f, 6.0f };
+                static const float turnR[4] = { 3.0f, 4.2f, 4.2f, 5.0f };
                 Vector2 tgt{ -1, -1 }; float best = 1e9f;
                 if (stageKind(stage) == SK_METEORS && !boss.active) {
                     // meteor field: lock onto the closest rock ahead of the ship (35 deg cone, 350 range); keep it until
@@ -2088,10 +2089,10 @@ struct Game {
                 float cur = atan2f(b.vel.y, b.vel.x);
                 if (tgt.x >= 0 || tgt.y < -100) {
                     float want = atan2f(tgt.y - b.pos.y, tgt.x - b.pos.x);
-                    float d = fmodf(want - cur + 3 * PI, 2 * PI) - PI, turn = turnR[b.kind == PB_DRONE ? 0 : wlevel] * dt;
+                    float d = fmodf(want - cur + 3 * PI, 2 * PI) - PI, turn = (b.kind == PB_DRONE ? 3.5f : turnR[wlevel]) * dt;
                     cur += std::clamp(d, -turn, turn);
                 }
-                float sp = std::min(560.0f, Vector2Length(b.vel) + 500 * dt);
+                float sp = std::min(b.kind == PB_DRONE ? 560.0f : 480.0f, Vector2Length(b.vel) + 500 * dt);
                 b.vel = { cosf(cur) * sp, sinf(cur) * sp };
                 float life = frand(0.18f, 0.3f);
                 parts.push_back({ b.pos, { frand(-8, 8), frand(-8, 8) }, life, life, frand(2.5f, 4), WCOL[W_HOMING], TRAIL });
@@ -2103,6 +2104,7 @@ struct Game {
                                       life, life, frand(3, 6), GetRandomValue(0, 2) ? Color{ 255, 90, 40, 255 } : Color{ 255, 200, 120, 255 }, TRAIL });
                 }
             } else if (b.kind == PB_SPREAD) {
+                if (b.age > SPREAD_LIFE) b.pos.y = -100;   // short range: pellets burn out after ~430 px
                 if (GetRandomValue(0, 1)) { float life = frand(0.12f, 0.22f);
                     parts.push_back({ b.pos, { 0, 0 }, life, life, 3.5f, WCOL[W_SPREAD], TRAIL }); }
             } else if (b.kind == PB_ION) {
@@ -2321,7 +2323,7 @@ struct Game {
                     pBullets.push_back({ { m.x + off, m.y }, { off * 0.6f, -640 }, PB_PHOTON }); }
                 break; }
             case W_SPREAD: {
-                static const int pel[4] = { 3, 5, 5, 7 }, vol[4] = { 2, 2, 3, 3 };
+                static const int pel[4] = { 3, 5, 5, 5 }, vol[4] = { 2, 2, 3, 3 };
                 static const float spr[4] = { 30, 42, 46, 62 };
                 int n = pel[wlevel];
                 if (countPB(PB_SPREAD) + n > vol[wlevel] * n) return;
@@ -2329,16 +2331,16 @@ struct Game {
                     pBullets.push_back({ m, { cosf(a) * 620, sinf(a) * 620 }, PB_SPREAD }); }
                 break; }
             case W_HOMING: {
-                static const int per[4] = { 2, 2, 3, 4 }, cap[4] = { 6, 6, 8, 10 };
+                static const int per[4] = { 1, 2, 3, 4 }, cap[4] = { 4, 4, 6, 8 };
                 int n = per[wlevel];
                 if (countPB(PB_HOMING) + n > cap[wlevel]) return;
                 for (int i = 0; i < n; ++i) { float a = (-90 + (i - (n - 1) / 2.0f) * 38) * DEG2RAD;
-                    pBullets.push_back({ { m.x + cosf(a) * 10, m.y + 6 }, { cosf(a) * 300, sinf(a) * 300 }, PB_HOMING }); }
+                    pBullets.push_back({ { m.x + cosf(a) * 10, m.y + 6 }, { cosf(a) * 260, sinf(a) * 260 }, PB_HOMING }); }
                 break; }
             case W_ION: {
-                static const int cap[4] = { 2, 2, 3, 3 };
+                static const int cap[4] = { 2, 3, 3, 4 };
                 if (countPB(PB_ION) >= cap[wlevel]) return;
-                pBullets.push_back({ m, { 0, -430 }, PB_ION });
+                pBullets.push_back({ m, { 0, -560 }, PB_ION });
                 break; }
             default: return;
         }
@@ -2429,7 +2431,7 @@ struct Game {
 
     // Ion Burst detonation: damages everything nearby; Lv3 chains lightning to up to 3 more enemies
     void ionBlast(Vector2 at, bool bossDirect) {
-        static const float R[4] = { 55, 75, 75, 85 };
+        static const float R[4] = { 70, 80, 80, 85 };
         float r = R[wlevel];
         Color c = WCOL[W_ION];
         parts.push_back({ at, { 0, 0 }, 0.25f, 0.25f, r * 1.1f, Color{ 230, 200, 255, 255 }, FLASH });
@@ -2447,7 +2449,7 @@ struct Game {
             if (it != meteors.end()) hitMeteor((size_t)(it - meteors.begin()), Vector2Subtract(it->pos, at));
         }
         if (!bossDirect && boss.active && boss.state == B_FIGHT && Vector2Distance(boss.core(), at) < r + boss.size() * 0.3f) damageBoss(at);
-        if (wlevel >= 3) {   // chain lightning
+        if (wlevel >= 2) {   // chain lightning (Lv2+)
             std::vector<Enemy*> near;
             for (auto& e : enemies) if (e.state != DEAD && e.state != WAITING && Vector2Distance(e.pos, at) < 180) near.push_back(&e);
             std::sort(near.begin(), near.end(), [&](Enemy* a, Enemy* b) { return Vector2Distance(a->pos, at) < Vector2Distance(b->pos, at); });
@@ -2502,11 +2504,11 @@ struct Game {
             for (auto& m : meteors) if (m.pos.y < y0 && fabsf(m.pos.x - x) < m.r() * 0.9f + w / 2) mids.push_back(m.id);
             for (int id : mids) { auto it = std::find_if(meteors.begin(), meteors.end(), [id](const Meteor& m) { return m.id == id; });
                 if (it != meteors.end()) { hitMeteor((size_t)(it - meteors.begin()), { 0, -1 }); any = true; } }
-            if (bossY > 0) { damageBoss({ x, bossY }); any = true; }
+            if (bossY > 0) { damageBoss({ x, bossY }, 2.0f); any = true; }
             if (any) ++hits;
         } else if (firstE) { hitEnemy(*firstE, { x, stop }); ++hits; }
         else if (firstM >= 0) { hitMeteor((size_t)firstM, { 0, -1 }); ++hits; }
-        else if (firstBoss) { damageBoss({ x, stop }); ++hits; }
+        else if (firstBoss) { damageBoss({ x, stop }, 2.0f); ++hits; }
     }
 
     void collectPackage(const Package& pk) {
@@ -2673,7 +2675,7 @@ struct Game {
             if (!used && boss.active && boss.state == B_FIGHT && boss.hitTest(pb.pos)) {
                 used = true; ++hits;
                 impact(pb.pos);
-                damageBoss(pb.pos);
+                damageBoss(pb.pos, pb.kind == PB_ION ? 3.0f : (pb.kind == PB_HOMING || pb.kind == PB_DRONE) ? 0.75f : pb.kind == PB_SPREAD ? 0.5f : 1.0f);
                 if (pb.kind == PB_ION && boss.active && boss.state == B_FIGHT) ionBlast(pb.pos, true);
             }
             if (used) pBullets.erase(pBullets.begin() + i); else ++i;
@@ -3001,11 +3003,13 @@ struct Game {
                     DrawRectanglePro({ b.pos.x, b.pos.y, 16, 1.0f }, { 8, 0.5f }, a + 45, Color{ 255, 230, 200, 140 });
                 }
                 DrawCircleV(b.pos, 3.2f, WHITE);
-            } else if (b.kind == PB_SPREAD) {  // spread plasma bolt
-                drawGlow(b.pos, 18, Color{ 255, 150, 40, 210 });
-                for (int k = 1; k <= 3; ++k) drawGlow(Vector2Subtract(b.pos, Vector2Scale(dv, k * 7.0f)), 9 - k * 2.0f, Color{ 255, 140, 40, (unsigned char)(170 - k * 40) });
-                DrawLineEx(Vector2Subtract(b.pos, Vector2Scale(dv, 8)), Vector2Add(b.pos, Vector2Scale(dv, 6)), 5, Color{ 255, 220, 120, 255 });
-                DrawLineEx(Vector2Subtract(b.pos, Vector2Scale(dv, 5)), Vector2Add(b.pos, Vector2Scale(dv, 5)), 2.2f, WHITE);
+            } else if (b.kind == PB_SPREAD) {  // spread plasma bolt (shrinks and fades as it burns out)
+                float k0 = Clamp((SPREAD_LIFE - b.age) / 0.15f, 0, 1), sc = 0.4f + 0.6f * k0;
+                auto A = [&](int a) { return (unsigned char)(a * k0); };
+                drawGlow(b.pos, 18 * sc, Color{ 255, 150, 40, A(210) });
+                for (int k = 1; k <= 3; ++k) drawGlow(Vector2Subtract(b.pos, Vector2Scale(dv, k * 7.0f * sc)), (9 - k * 2.0f) * sc, Color{ 255, 140, 40, A(170 - k * 40) });
+                DrawLineEx(Vector2Subtract(b.pos, Vector2Scale(dv, 8 * sc)), Vector2Add(b.pos, Vector2Scale(dv, 6 * sc)), 5 * sc, Color{ 255, 220, 120, A(255) });
+                DrawLineEx(Vector2Subtract(b.pos, Vector2Scale(dv, 5 * sc)), Vector2Add(b.pos, Vector2Scale(dv, 5 * sc)), 2.2f * sc, Color{ 255, 255, 255, A(255) });
             } else if (b.kind == PB_HOMING || b.kind == PB_DRONE) {  // homing missile (body drawn here; trail from particles)
                 drawGlow(Vector2Subtract(b.pos, Vector2Scale(dv, 7)), 12, Color{ 160, 255, 140, 230 });
                 float ang = atan2f(dv.y, dv.x) * RAD2DEG;

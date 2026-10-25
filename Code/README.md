@@ -58,13 +58,15 @@ From stage 2, every alien wave has one **Courier** in its formation: an armoured
 
 While you have the un-upgraded Photon Torpedo, half the packages are new weapons; once you hold another weapon or an upgraded Photon, 80 % are upgrades. New-weapon drops come from a shuffle bag, so you see each of the other weapon classes once before any repeats.
 
-| Weapon | Behaviour | Limit (Lv0 → Lv3) |
-|---|---|---|
-| Photon Torpedo | the default; Lv2 fires 2, Lv3 fires 3 per volley | 3 → 5 volleys on screen |
-| Spread Cannon | fan of pellets, wider and denser with level | 3 → 7 pellets, 2 → 3 volleys |
-| Pulse Laser | continuous beam while held; builds heat and overheats (cool-down until the gauge drops). Lv3 pierces | beam width 4.5 → 11 |
-| Homing Swarm | mini-missiles that steer to the nearest enemy; in meteor fields each one locks onto the closest rock ahead of your ship (or flies straight if there is none) | 2 → 4 per shot, 6 → 10 on screen |
-| Ion Burst | slow orb that explodes in an area; Lv3 chains lightning to 3 more enemies | 2 → 3 orbs on screen |
+| Weapon | Role | Behaviour | Limit (Lv0 → Lv3) |
+|---|---|---|---|
+| Photon Torpedo | all-rounder | the default; fast and precise. Lv2 fires 2, Lv3 fires 3 per volley | 3 → 5 volleys on screen |
+| Spread Cannon | close-range crowd control | fan of pellets that burn out after ~430 px, so you must fly up to reach the top rows or a boss. Pellets do half damage to bosses | 3 → 5 pellets (fan widens 30° → 62°), 2 → 3 volleys |
+| Pulse Laser | sustained beam, boss melter | continuous beam while held; builds heat and overheats (about 2.5 s at Lv0). Each tick does double damage to bosses. Lv3 pierces | beam width 4.5 → 11 |
+| Homing Swarm | hands-free, safe while dodging | mini-missiles that steer to the nearest enemy; in meteor fields each one locks onto the closest rock ahead of your ship. Slower and a little less agile; ¾ damage to bosses | 1 → 4 per shot, 4 → 8 on screen |
+| Ion Burst | area heavy cannon | fast orb that explodes in an area (radius 70 → 85) and clears missiles and rocks. A direct boss hit does triple damage. Lv2+ chains lightning to 3 more enemies | 2 → 4 orbs on screen |
+
+The weapons were balanced with an automated 120-game test (each weapon at Lv0 and Lv3, early and late waves, meteor fields and bosses), so each is within reach of the Photon Torpedo overall and wins in its own niche.
 
 **Wingman drone:** catching an upgrade when you're already at Lv3 also brings a small escort drone for 30 s (another one refreshes the timer). It flies on an arc around your ship (left, over the top, right; never below or on it), drifting naturally and dodging incoming enemy shots at up to 75% more than your ship's speed, and fires one basic homing missile at a time (its missiles don't count against your weapon's limit). One enemy hit destroys it; it's also lost if you lose a life, and it doesn't follow you through a hyperspace jump. A green timer next to the weapon indicator counts down; the drone blinks in its last 5 s.
 
