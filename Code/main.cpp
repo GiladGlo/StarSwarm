@@ -348,7 +348,8 @@ struct Enemy {
 
 // Enemy projectile kinds (boss weapons get their own look)
 enum BKind { BK_ENEMY = 0, BK_ORB = 1, BK_MISSILE = 2, BK_METEOR = 3, BK_BOLT = 4, BK_SPIRAL = 5, BK_CRYSTAL = 6,
-             BK_C_SPREAD = 7, BK_C_PULSE = 8, BK_C_HOMING = 9, BK_C_ION = 10, BK_C_PHOTON = 11 };   // 7+: Courier shots
+             BK_C_SPREAD = 7, BK_C_PULSE = 8, BK_C_HOMING = 9, BK_C_ION = 10, BK_C_PHOTON = 11,
+             BK_FLAK = 12 };   // 12: mining-outpost flak shell (shootable)   // 7+: Courier shots
 
 enum PBKind { PB_PHOTON = 0, PB_SPREAD = 1, PB_HOMING = 3, PB_ION = 4, PB_DRONE = 5 };   // PB_DRONE: wingman's basic homing missile   // player projectile kinds
 struct Package   { Vector2 pos; int content; float t; };   // content: W_SPREAD..W_ION, or -1 = upgrade
@@ -435,6 +436,8 @@ struct Meteor {
     float fuse = 0;   // >0: caught in a blast, detonates when it runs out
     int   id = 0;
     bool  outpost = false;   // carries a mining outpost: stabilised (slow 2D turn instead of a tumble)
+    int   hp = 0, hpMax = 0; // outpost armour: hits left before the station blows
+    float gunT = 0, gunAim = 90, smokeT = 0;   // point-defence turret: time to next shot, barrel angle (deg)
     float r() const { return METEOR_R[size]; }
     bool  volatileRock() const { return variant == VOLATILE_VARIANT; }
 };
@@ -697,12 +700,79 @@ struct Game {
         }
     }
 
+    // Mining outpost: drifts with the field at ~70% of the average rock speed (rocks spawn at 35-105 px/s by size)
+    void spawnOutpost(float x, float y) {
+        float fieldAvg = (45.0f + 65.0f + 87.5f) / 3 * (1 + 0.04f * cycleIndex());
+        Meteor m{ { x, y }, { frand(-10, 10), 0.7f * fieldAvg }, frand(0, 360), frand(5, 8) * (GetRandomValue(0, 1) ? 1 : -1), 0, M_LARGE, 0 };
+        m.outpost = true;
+        m.hp = m.hpMax = OUTPOST_HP_BASE + std::min(6, cycleIndex());
+        m.gunT = 1.5f;
+        addMeteor(m);
+    }
     void addMeteor(Meteor m) { m.id = nextMeteorId++; meteors.push_back(m); }
 
-    // Any hit on a rock: volatile rocks detonate, ordinary rocks split
+    // Any hit on a rock: volatile rocks detonate, ordinary rocks split.
+    // A mining outpost soaks up hits first; only the last one blows the station off its rock.
     void hitMeteor(size_t idx, Vector2 hitDir) {
-        if (meteors[idx].outpost) destroyOutpost(meteors[idx]);
+        if (meteors[idx].outpost) {
+            if (--meteors[idx].hp > 0) { damageOutpost(meteors[idx], hitDir); return; }
+            destroyOutpost(meteors[idx]);
+            detonateMeteor(idx);                 // the station's fuel goes up: volatile-style blast, no fragments
+            return;
+        }
         if (meteors[idx].volatileRock()) detonateMeteor(idx); else breakMeteor(idx, hitDir);
+    }
+
+    static constexpr int OUTPOST_HP_BASE = 6;             // 6 hits early, up to 12 in later cycles
+    float outpostHealth(const Meteor& m) const { return m.hpMax > 0 ? (float)m.hp / m.hpMax : 1.0f; }
+    Vector2 outpostLocal(const Meteor& m, Vector2 u) const {   // unit coords on the station -> world
+        float S = m.r() * 2 / 0.8f * 1.08f, a = m.rot * DEG2RAD; Vector2 q{ u.x * S * 0.5f, u.y * S * 0.5f };
+        return { m.pos.x + q.x * cosf(a) - q.y * sinf(a), m.pos.y + q.x * sinf(a) + q.y * cosf(a) };
+    }
+    static constexpr Vector2 OUTPOST_GUN{ 0.36f, 0.42f };
+    // Non-lethal outpost hit: flash, sparks and metal chips at the impact point; a bigger burst at each damage stage
+    void damageOutpost(Meteor& m, Vector2 hitDir) {
+        m.flash = 0.12f;
+        Vector2 n = Vector2Length(hitDir) > 0.1f ? Vector2Normalize(hitDir) : Vector2{ 0, -1 };
+        Vector2 at = Vector2Subtract(m.pos, Vector2Scale(n, m.r() * 0.7f));
+        for (int i = 0; i < 10; ++i) { float a = atan2f(-n.y, -n.x) + frand(-1.1f, 1.1f), sp = frand(90, 260), life = frand(0.15f, 0.4f);
+            parts.push_back({ at, { cosf(a) * sp, sinf(a) * sp }, life, life, frand(1.2f, 2.2f),
+                              GetRandomValue(0, 1) ? Color{ 255, 230, 160, 255 } : Color{ 255, 150, 60, 255 }, SPARK }); }
+        for (int i = 0; i < 3; ++i) { float a = frand(0, 2 * PI), sp = frand(40, 140), life = frand(0.4f, 0.8f);
+            parts.push_back({ at, { cosf(a) * sp, sinf(a) * sp }, life, life, frand(1.5f, 2.5f), Color{ 200, 205, 215, 255 }, DEBRIS, frand(0, 360), frand(-600, 600) }); }
+        float f = outpostHealth(m), fPrev = (float)(m.hp + 1) / m.hpMax;
+        if ((fPrev > 0.66f && f <= 0.66f) || (fPrev > 0.33f && f <= 0.33f)) {   // damage stage reached: a module pops
+            explode(at, Color{ 255, 200, 120, 255 }, Color{ 240, 140, 40, 255 }, 14, 160);
+            shake = std::max(shake, 0.15f);
+        }
+        PlaySound(sfx[SFX_IMPACT]);
+    }
+    // Point-defence turret + damage smoke/sparks, run each frame for every outpost rock
+    void updateOutpost(Meteor& m, float dt) {
+        Vector2 g = outpostLocal(m, OUTPOST_GUN);
+        float want = atan2f(player.y - g.y, player.x - g.x) * RAD2DEG;
+        float d = fmodf(want - m.gunAim + 540, 360) - 180;
+        m.gunAim += std::clamp(d, -120 * dt, 120 * dt);                       // barrel tracks the player
+        bool canFire = mode == PLAYING && playerAlive && m.pos.y > 30 && m.pos.y < player.y - 140;
+        m.gunT -= dt;
+        if (!canFire) m.gunT = std::max(m.gunT, 0.45f);                       // hold the shot (keeps the warning honest)
+        else if (m.gunT <= 0) {
+            float a = m.gunAim * DEG2RAD, sp = 150 + 6 * cycleIndex();
+            Vector2 mz{ g.x + cosf(a) * 15, g.y + sinf(a) * 15 };
+            eBullets.push_back({ mz, { cosf(a) * sp, sinf(a) * sp }, BK_FLAK });
+            for (int i = 0; i < 6; ++i) { float b = a + frand(-0.5f, 0.5f), v = frand(60, 160), life = frand(0.1f, 0.25f);
+                parts.push_back({ mz, { cosf(b) * v, sinf(b) * v }, life, life, frand(1.5f, 2.5f), Color{ 255, 120, 60, 255 }, SPARK }); }
+            m.gunT = std::max(1.8f, 2.4f - 0.08f * cycleIndex());
+        }
+        float f = outpostHealth(m);
+        if (f <= 0.66f && (m.smokeT -= dt) <= 0) {                           // damaged: smoke, then sparks and fire
+            m.smokeT = f <= 0.33f ? 0.05f : 0.12f;
+            Vector2 p = outpostLocal(m, { frand(-0.3f, 0.5f), frand(-0.45f, 0.1f) });
+            float life = frand(0.7f, 1.3f);
+            parts.push_back({ p, { frand(-12, 12), frand(-50, -25) }, life, life, frand(6, 10), Color{ 150, 145, 150, 255 }, SMOKE });
+            if (f <= 0.33f && GetRandomValue(0, 2) == 0) { float l2 = frand(0.15f, 0.35f), a = frand(0, 2 * PI);
+                parts.push_back({ p, { cosf(a) * 120, sinf(a) * 120 }, l2, l2, frand(1.2f, 2), Color{ 255, 210, 120, 255 }, SPARK }); }
+        }
     }
 
     // Mining outpost blown off its rock: explosion, metal debris, 500 points and a package (Courier odds).
@@ -748,6 +818,7 @@ struct Game {
             auto it = std::find_if(meteors.begin(), meteors.end(), [id](const Meteor& o) { return o.id == id; });
             if (it == meteors.end()) continue;
             if (it->volatileRock()) { if (it->fuse <= 0) it->fuse = 0.15f; continue; }   // chain reaction
+            if (it->outpost) { hitMeteor((size_t)(it - meteors.begin()), Vector2Subtract(it->pos, m.pos)); continue; }   // armour soaks one hit
             breakMeteor((size_t)(it - meteors.begin()), Vector2Subtract(it->pos, m.pos));
         }
     }
@@ -790,9 +861,7 @@ struct Game {
             if (spawnT <= 0) { spawnT = 0.12f; if (density() < targetDensity) spawnMeteor(); }
             if (outpostsSpawned < 3 && fieldT >= fieldDur * 0.3f * (outpostsSpawned + 1)) {   // mining outposts at ~30/60/90%
                 ++outpostsSpawned;
-                Meteor m{ { frand(90, W - 90.0f), -METEOR_R[M_LARGE] - 20 }, { frand(-10, 10), 38 }, frand(0, 360), frand(5, 8) * (GetRandomValue(0, 1) ? 1 : -1), 0, M_LARGE, 0 };
-                m.outpost = true;
-                addMeteor(m);
+                spawnOutpost(frand(90, W - 90.0f), -METEOR_R[M_LARGE] - 20);
             }
         }
         for (auto& m : meteors) {
@@ -801,6 +870,7 @@ struct Game {
             if (fieldT > fieldDur) m.vel.y += 40 * dt;      // field over: the stragglers speed past
             m.rot += m.spin * dt;
             m.flash = std::max(0.0f, m.flash - dt);
+            if (m.outpost) updateOutpost(m, dt);
             if (m.pos.x < m.r() * 0.5f && m.vel.x < 0) m.vel.x = -m.vel.x;     // stay on screen sideways
             if (m.pos.x > W - m.r() * 0.5f && m.vel.x > 0) m.vel.x = -m.vel.x;
         }
@@ -830,18 +900,43 @@ struct Game {
         DrawTexturePro(st, { 0, 0, (float)st.width, (float)st.height }, { m.pos.x, m.pos.y, S, S }, { S / 2, S / 2 }, m.rot, WHITE);
         float a = m.rot * DEG2RAD;
         auto L = [&](Vector2 u) { Vector2 q{ u.x * S * 0.5f, u.y * S * 0.5f }; return Vector2{ m.pos.x + q.x * cosf(a) - q.y * sinf(a), m.pos.y + q.x * sinf(a) + q.y * cosf(a) }; };
-        Vector2 dc = L({ -0.48f, -0.32f }); float da = time * 3 + m.id;
+        float hf = outpostHealth(m);
+        Vector2 dc = L({ -0.48f, -0.32f }); float da = hf > 0.66f ? time * 3 + m.id : m.id + 0.7f;   // dish jams once damaged
         float rx = 2 + 8 * fabsf(cosf(da));
         DrawEllipse((int)dc.x, (int)dc.y, rx, 8, Color{ 220, 225, 235, 255 });
         DrawEllipseLines((int)dc.x, (int)dc.y, rx, 8, Color{ 90, 95, 110, 255 });
         BeginBlendMode(BLEND_ADDITIVE);
         float t = time + m.id * 0.37f;
+        bool lightsOn = hf > 0.33f || fmodf(time * 7.3f + m.id, 1.0f) < 0.55f;   // badly damaged: power flickers
+        if (lightsOn) {
         if (fmodf(t, 1.2f) < 0.1f) drawGlow(L({ 0.64f, -0.52f }), 8, Color{ 255, 60, 60, 255 });
         if (fmodf(t + 0.6f, 1.2f) < 0.1f) drawGlow(L({ -0.42f, -0.1f }), 7, Color{ 80, 255, 120, 255 });
         if (fmodf(t + 0.3f, 0.9f) < 0.08f) drawGlow(L({ -0.22f, 0.04f }), 9, Color{ 255, 255, 255, 255 });
         drawGlow(L({ -0.22f, 0.38f }), 11 + 2 * sinf(t * 12), Color{ 255, 140, 40, 140 });
         for (int k = 0; k < 4; ++k) { float u = fmodf(t * 1.5f + k * 0.25f, 1.f);
             drawGlow(Vector2Lerp(L({ -0.22f, 0.62f }), L({ -0.22f, 0.38f }), u), 3, Color{ 255, 200, 120, (unsigned char)(200 * (1 - u)) }); }
+        }
+        if (hf <= 0.66f) drawGlow(L({ 0.12f, -0.22f }), (hf <= 0.33f ? 16 : 9) + 3 * sinf(time * 23), Color{ 255, 110, 30, (unsigned char)(hf <= 0.33f ? 230 : 130) });   // hull breach fire
+        // point-defence turret: charge glow at the muzzle just before it fires
+        Vector2 g = L(OUTPOST_GUN); float ga = m.gunAim * DEG2RAD;
+        Vector2 mz{ g.x + cosf(ga) * 15, g.y + sinf(ga) * 15 };
+        if (m.gunT < 0.45f) { float c = 1 - m.gunT / 0.45f; drawGlow(mz, 6 + 12 * c, Color{ 255, 80, 50, (unsigned char)(120 + 135 * c) }); }
+        EndBlendMode();
+        Vector2 mzb{ g.x + cosf(ga) * 14, g.y + sinf(ga) * 14 };
+        DrawLineEx(g, mzb, 4.2f, Color{ 55, 57, 66, 255 });                       // twin-barrel housing
+        DrawLineEx(g, mzb, 1.6f, Color{ 160, 165, 180, 255 });
+        DrawCircleV(g, 8.0f, Color{ 45, 47, 56, 255 }); DrawCircleV(g, 6.5f, Color{ 150, 60, 50, 255 });   // red-striped dome
+        DrawCircleV(g, 4.2f, Color{ 120, 125, 140, 255 });
+        DrawCircleV({ g.x - 1.6f, g.y - 1.6f }, 1.8f, Color{ 215, 220, 235, 255 });
+        if (m.hp < m.hpMax) {                                  // armour pips under the rock once it has been hit
+            float pw = 5, gap = 2, tw = m.hpMax * (pw + gap) - gap, x0 = m.pos.x - tw / 2, y0 = m.pos.y + m.r() + 8;
+            DrawRectangleRounded({ x0 - 3, y0 - 2, tw + 6, 7 }, 0.5f, 4, Color{ 0, 0, 0, 150 });
+            for (int i = 0; i < m.hpMax; ++i) {
+                Color c = i < m.hp ? (hf > 0.66f ? Color{ 120, 230, 140, 255 } : hf > 0.33f ? Color{ 255, 200, 70, 255 } : Color{ 255, 90, 60, 255 }) : Color{ 60, 60, 70, 255 };
+                DrawRectangle((int)(x0 + i * (pw + gap)), (int)y0, (int)pw, 3, c);
+            }
+        }
+        BeginBlendMode(BLEND_ADDITIVE);
         if (m.flash > 0) drawGlow(m.pos, S * 0.5f, Color{ 255, 220, 180, (unsigned char)(160 * m.flash / 0.12f) });
         EndBlendMode();
     }
@@ -857,7 +952,7 @@ struct Game {
                 EndBlendMode();
             }
             S *= 1.08f;
-            if (m.outpost) { drawOutpost(m, S); continue; }
+            if (m.outpost) continue;                    // drawn last, on top of the field
             float tilt = (float)((m.id * 53) % 40 - 20);   // fixed per-rock orientation; the tumble is in the atlas
             const Texture2D& tex = gfx.meteor[m.variant];
             m3d::draw(tex, m.rot, { m.pos.x + S * 0.12f, m.pos.y + S * 0.18f }, S * 0.95f, tilt, Color{ 0, 0, 0, 110 }, false);   // shadow
@@ -876,6 +971,7 @@ struct Game {
                 EndBlendMode();
             }
         }
+        for (const auto& m : meteors) if (m.outpost) drawOutpost(m, m.r() * 2 / 0.8f * 1.08f);
     }
 
     // ============================================================= BOSSES ==
@@ -2518,8 +2614,8 @@ struct Game {
     }
 
     // Physical enemy projectiles that player weapons can destroy; energy shots are unaffected.
-    static bool shootable(int kind) { return kind == BK_MISSILE || kind == BK_C_HOMING || kind == BK_METEOR; }
-    static float shootableR(int kind) { return kind == BK_METEOR ? 11.f : 7.f; }
+    static bool shootable(int kind) { return kind == BK_MISSILE || kind == BK_C_HOMING || kind == BK_METEOR || kind == BK_FLAK; }
+    static float shootableR(int kind) { return kind == BK_METEOR ? 11.f : kind == BK_FLAK ? 9.f : 7.f; }
     void destroyProjectile(size_t i) {
         Bullet b = eBullets[i];
         eBullets.erase(eBullets.begin() + i);
@@ -2970,6 +3066,12 @@ struct Game {
                 drawGlow(b.pos, 26, Color{ c.r, c.g, c.b, 190 });
                 DrawPoly(b.pos, 4, 9, rot, Color{ c.r, c.g, c.b, 240 });
                 DrawPoly(b.pos, 4, 4, rot, WHITE);
+            } else if (b.kind == BK_FLAK) {    // OUTPOST FLAK: slow spiky red shell (shootable)
+                float rot = b.age * 300, pl = 0.85f + 0.15f * sinf(time * 25 + b.pos.x);
+                drawGlow(b.pos, 20 * pl, Color{ 255, 70, 40, 200 });
+                DrawPoly(b.pos, 4, 8, rot, Color{ 255, 120, 60, 255 });
+                DrawPoly(b.pos, 4, 8, rot + 45, Color{ 255, 90, 50, 255 });
+                DrawCircleV(b.pos, 3.4f, Color{ 255, 240, 200, 255 });
             } else if (b.kind == BK_MISSILE) { // SEEKER: engine flame (body drawn below, unblended)
                 float fl = 0.8f + 0.2f * sinf(time * 60 + b.pos.x);
                 Vector2 back = Vector2Subtract(b.pos, Vector2Scale(dv, 9));
