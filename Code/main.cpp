@@ -1755,15 +1755,23 @@ struct Game {
     Rectangle escBox() const { return { 110, 255, W - 220.0f, 300 }; }
     Rectangle escBtn(int i) const { return { 150, 330 + i * 64.0f, W - 300.0f, 50 }; }
     void openEscMenu() { escMenu = true; escSel = 0; paused = false; while (GetCharPressed()) {} }
+    // Back to the title screen with a clean playfield: nothing from the last game (enemies, rocks, boss,
+    // shots, explosions, packages, popups, hyperspace, drone, laser hum) is left on screen.
+    void returnToTitle() {
+        enemies.clear(); pBullets.clear(); eBullets.clear(); parts.clear(); rings.clear(); warnings.clear();
+        packages.clear(); zaps.clear(); meteors.clear(); popups.clear(); pendingSplits.clear();
+        boss = Boss{}; meteorField = false; shake = 0; hyperT = -1;
+        droneOn = false; laserOn = false; heat = 0; overheated = false; stopLaserLoop();
+        playerAlive = false; invuln = 0; shield = false; bannerTimer = 0; stageTimer = 0;
+        mode = TITLE; titleT = 0; paused = false;
+    }
+
     void escChoose(int i) {
         escMenu = false;
         if (i == 1) {   // end current game -> back to the title screen
             if (!debugRun && score > hiScore) hiScore = score;
             saveHiScore();
-            enemies.clear(); pBullets.clear(); eBullets.clear(); parts.clear(); rings.clear(); warnings.clear();
-            packages.clear(); zaps.clear(); meteors.clear(); popups.clear(); pendingSplits.clear();
-            boss.active = false; meteorField = false; shake = 0;
-            mode = TITLE; titleT = 0; paused = false;
+            returnToTitle();
         } else if (i == 2) {   // exit to desktop
             if (mode != TITLE && !debugRun && score > hiScore) hiScore = score;
             saveHiScore();
@@ -1835,14 +1843,14 @@ struct Game {
                 explode(p, cs[GetRandomValue(0, 5)], WHITE, 40, 260);
                 playSfx(SFX_BOOM);
             }
-            if (stageTimer > 3.0f && (IsKeyPressed(KEY_SPACE) || IsKeyPressed(KEY_ENTER))) mode = TITLE;
+            if (stageTimer > 3.0f && (IsKeyPressed(KEY_SPACE) || IsKeyPressed(KEY_ENTER))) returnToTitle();
             return;
         }
         if (mode == GAMEOVER) {
             updateEnemies(dt);
             updateBoss(dt);
             updateMeteors(dt);
-            if (stageTimer > 2.0f && (IsKeyPressed(KEY_SPACE) || IsKeyPressed(KEY_ENTER))) mode = TITLE;
+            if (stageTimer > 2.0f && (IsKeyPressed(KEY_SPACE) || IsKeyPressed(KEY_ENTER))) returnToTitle();
             stageTimer += dt;
             return;
         }
