@@ -11,6 +11,7 @@
 #include "monsters.h"
 #include "sfxsynth.h"
 #include "titlemusic.h"
+#include "gamemusic.h"
 #include <thread>
 #include <atomic>
 #include <functional>
@@ -468,6 +469,51 @@ struct Game {
             SetSoundVolume(titleFx[k], sfx::titleFxGain((sfx::TitleFx)k));
         }
     }
+    // ---- In-game background music (gamemusic.h): one score per stage, rotation restarts after every boss ----
+    Music gameMusic[sfx::GT_COUNT]{}; bool gameMusicOk[sfx::GT_COUNT]{};
+    std::vector<unsigned char> gameMusicWav[sfx::GT_COUNT];
+    float gameMusicVol[sfx::GT_COUNT]{};               // crossfade level per score (0..1)
+    bool  gameMusicPaused = false;
+    void loadGameMusic(std::vector<std::vector<float>>& pcm) {
+        for (int k = 0; k < sfx::GT_COUNT; ++k) {
+            gameMusicWav[k] = makeWav(pcm[k], 44100);
+            std::vector<float>().swap(pcm[k]);
+            gameMusic[k] = LoadMusicStreamFromMemory(".wav", gameMusicWav[k].data(), (int)gameMusicWav[k].size());
+            gameMusicOk[k] = gameMusic[k].stream.buffer != nullptr;
+            if (gameMusicOk[k]) gameMusic[k].looping = true;
+        }
+    }
+    void unloadGameMusic() { for (int k = 0; k < sfx::GT_COUNT; ++k) if (gameMusicOk[k]) { StopMusicStream(gameMusic[k]); UnloadMusicStream(gameMusic[k]); } }
+    // Which score should be playing now (-1 = none): stage's slot in the boss cycle while playing;
+    // silence on the title / game over / victory screens and once the boss starts dying (fades out into the jump).
+    int wantedGameTrack() const {
+        if (mode != PLAYING) return -1;
+        if (stageKind(stage) == SK_BOSS && (!boss.active || boss.state == B_DYING)) return -1;   // boss destroyed: quiet until the next sector
+        return sfx::trackForStageInCycle((stage - 1) % CYCLE);
+    }
+    void updateGameMusic(float dt) {
+        bool hold = paused || escMenu;                   // pause the music with the game
+        if (hold != gameMusicPaused) {
+            for (int k = 0; k < sfx::GT_COUNT; ++k) if (gameMusicOk[k] && gameMusicVol[k] > 0) { if (hold) PauseMusicStream(gameMusic[k]); else ResumeMusicStream(gameMusic[k]); }
+            gameMusicPaused = hold;
+        }
+        if (hold) return;
+        int want = wantedGameTrack();
+        for (int k = 0; k < sfx::GT_COUNT; ++k) {
+            if (!gameMusicOk[k]) continue;
+            float& v = gameMusicVol[k];
+            if (k == want) {
+                if (v <= 0 && !IsMusicStreamPlaying(gameMusic[k])) { StopMusicStream(gameMusic[k]); PlayMusicStream(gameMusic[k]); }   // from the top
+                v = std::min(1.0f, v + dt / 1.5f);
+            } else v = std::max(0.0f, v - dt / 1.5f);
+            if (IsMusicStreamPlaying(gameMusic[k])) {
+                SetMusicVolume(gameMusic[k], sfx::GAME_MUSIC_GAIN * v);
+                UpdateMusicStream(gameMusic[k]);
+                if (v <= 0 && k != want) StopMusicStream(gameMusic[k]);
+            }
+        }
+    }
+
     void unloadTitleAudio() {
         if (titleMusicOk) { StopMusicStream(titleMusic); UnloadMusicStream(titleMusic); }
         for (auto& s : titleFx) UnloadSound(s);
@@ -3582,10 +3628,14 @@ int main(int argc, char** argv) {
     game.loadFont();
     game.buildTitleParticles();
     std::vector<float> titleMusicPcm;
-    std::thread musicJob([&] { titleMusicPcm = sfx::renderTitleMusic(44100); });   // synthesise while the graphics render
+    std::vector<std::vector<float>> gameMusicPcm(sfx::GT_COUNT);
+    std::vector<std::thread> musicJobs;                                    // synthesise all music while the graphics render
+    musicJobs.emplace_back([&] { titleMusicPcm = sfx::renderTitleMusic(44100); });
+    for (int k = 0; k < sfx::GT_COUNT; ++k) musicJobs.emplace_back([&, k] { gameMusicPcm[k] = sfx::renderGameTrack((sfx::GameTrack)k, 44100); });
     gfx.load();
-    musicJob.join();
+    for (auto& j : musicJobs) j.join();
     game.loadTitleAudio(titleMusicPcm);
+    game.loadGameMusic(gameMusicPcm);
     if (selftest) {
         int st = (argc > 3 && isdigit((unsigned char)argv[3][0])) ? atoi(argv[3]) : 1;
         if (argc > 3 && std::string(argv[3]) == "boss") st = CYCLE;
@@ -3620,6 +3670,7 @@ int main(int argc, char** argv) {
         if (selftest && argc > 3 && std::string(argv[3]) == "break" && frame == shotFrame - 6 && game.shield) game.breakShield({ game.player.x, game.player.y - SHIELD_RADIUS });
         game.update(dt);
         game.updateTitleAudio(dt);
+        game.updateGameMusic(dt);
         if (game.quitRequested) break;
         if (game.paused || game.escMenu || game.mode != PLAYING || !game.playerAlive) game.stopLaserLoop();   // beam hum never outlives the beam
         game.draw();
@@ -3630,6 +3681,7 @@ int main(int argc, char** argv) {
     if (game.score >= game.hiScore) game.saveHiScore();
     if (game.customFont) UnloadFont(game.font);
     gfx.unload();
+    game.unloadGameMusic();
     game.unloadTitleAudio();
     game.unloadSfx();
     CloseAudioDevice();
