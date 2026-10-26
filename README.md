@@ -46,4 +46,4 @@ QA ran on every change. After each change, Claude built the game, ran it, and ch
 
 [MIT](LICENSE)
 
-Developed by Gilad Globen. Dedicated to Daniel Globen.
+Developed by Gilad Globen. Dedicated to my son Daniel, my favorite gaming partner since he could hold a controller.
