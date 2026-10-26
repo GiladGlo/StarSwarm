@@ -22,17 +22,28 @@ Fly through 60 stages across 10 sectors. Each sector brings four alien waves, a 
 
 ## Play
 
-Run **StarSwarm.exe** (Windows, nothing to install).
+Download the latest build from **[Releases](https://github.com/GiladGlo/StarSwarm/releases/latest)** (Windows 64-bit, nothing to install). Each release lists SHA-256 checksums so you can verify the download. The build is not code-signed, so Windows SmartScreen may show a warning on first run. If you'd rather not run a downloaded exe, you can build it from source using the instructions in [Code/README.md](Code/README.md).
 
 | Key | Action |
 |---|---|
 | Arrows / WASD | Move |
 | Space | Fire (hold) |
 | P / Esc | Pause (Esc opens the menu) |
+| M | Mute / unmute music |
 | F11 / Alt+Enter | Fullscreen |
 
 Full gameplay details, scoring and build instructions: [Code/README.md](Code/README.md).
 
+## How it was built and tested
+
+Star Swarm was built with Claude as an AI pair programmer, and nearly every commit is co-authored with it. I defined what the game should be and how it should feel; Claude helped design and implement each feature.
+
+QA ran on every change. After each change, Claude built the game, ran it, and checked screenshots and logs to confirm the new behaviour worked and nothing else had broken, before the change was committed.
+
 *Written in C++ with raylib. Runs as a single Windows executable with nothing else to install.*
+
+## License
+
+[MIT](LICENSE)
 
 Developed by Gilad Globen. Dedicated to Daniel Globen.
