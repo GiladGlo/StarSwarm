@@ -38,7 +38,27 @@ static const float  PLAYER_Y_HIGH   = 800 - 490.0f;  // how far up the ship may 
 static const size_t MAX_TORPEDOES = 5;          // projectiles allowed on screen at once
 // Everything the game remembers (high score, mute settings, medals, lifetime counters) lives in one small binary
 // save file next to the exe; it is created on first run. The old text files are migrated once, then removed.
-static const char* SAVE_FILE = "starswarm.sav";
+static const char* SAVE_NAME = "starswarm.sav";
+static const char* LEGACY_SAVE_FILE = "starswarm.sav";          // v1.2 dev builds kept it next to the exe
+// Per-user data folder: %LOCALAPPDATA%\StarSwarm on Windows (with the startup cache), ~/.local/share/starswarm on Linux.
+// STARSWARM_DATA_DIR overrides it (tests). Falls back to the current folder if the variables are missing.
+static std::string userDataDir() {
+    if (const char* o = getenv("STARSWARM_DATA_DIR")) return o;
+#ifdef _WIN32
+    if (const char* b = getenv("LOCALAPPDATA")) return std::string(b) + "\\StarSwarm";
+#else
+    if (const char* x = getenv("XDG_DATA_HOME")) return std::string(x) + "/starswarm";
+    if (const char* h = getenv("HOME")) return std::string(h) + "/.local/share/starswarm";
+#endif
+    return ".";
+}
+static std::string savePath() {
+#ifdef _WIN32
+    return userDataDir() + "\\" + SAVE_NAME;
+#else
+    return userDataDir() + "/" + SAVE_NAME;
+#endif
+}
 static const char* LEGACY_HISCORE_FILE  = "starswarm_highscore.txt";
 static const char* LEGACY_MEDALS_FILE   = "starswarm_medals.txt";
 static const char* LEGACY_SETTINGS_FILE = "starswarm_settings.txt";
@@ -3598,7 +3618,7 @@ struct Game {
     Color rosterPodCol() const { int i = (int)fmodf(time * 0.8f, 6.0f); return i == 0 ? UPG_COL : WCOL[i < 5 ? i : 4]; }
 
     // ---- Title-screen mute button (bottom-left, icon only): click or M toggles title music + effects ----
-    bool titleMuted = false;                            // saved in SAVE_FILE; gameplay sound is never affected
+    bool titleMuted = false;                            // saved in the save file; gameplay sound is never affected
     static constexpr Rectangle MUTE_BTN{ 18, 754, 34, 34 };
     void toggleTitleMute() {
         titleMuted = !titleMuted;
@@ -3626,7 +3646,7 @@ struct Game {
     void drawMuteButtonShapes() { drawSpeakerButton(MUTE_BTN, titleMuted, CheckCollisionPointRec(mouseLogical(), MUTE_BTN)); }
 
     // ---- In-game music mute button (top-right corner, icon only): click or M; mutes only the background music ----
-    bool gameMusicMuted = false;                       // saved in SAVE_FILE
+    bool gameMusicMuted = false;                       // saved in the save file
     static constexpr Rectangle GAME_MUTE_BTN{ W - 36.0f, 8, 28, 28 };
     bool gameMuteVisible() const { return mode == PLAYING; }
     void toggleGameMusicMute() { gameMusicMuted = !gameMusicMuted; saveSettings(); }
@@ -3873,13 +3893,14 @@ struct Game {
         put32(b + 8, (uint32_t)hiScore); put32(b + 12, bits); put32(b + 16, (uint32_t)courierKillsTotal); put32(b + 20, (uint32_t)flakShotTotal);
         b[24] = (titleMuted ? 1 : 0) | (gameMusicMuted ? 2 : 0);
         put32(b + 28, crc32(b, 28));
-        std::string tmp = std::string(SAVE_FILE) + ".tmp";                 // write a temp file, then swap it in
+        std::string path = savePath(), dir = userDataDir(), tmp = path + ".tmp";   // write a temp file, then swap it in
+        if (!DirectoryExists(dir.c_str())) MakeDirectory(dir.c_str());
         { std::ofstream f(tmp, std::ios::binary); if (!f) return; f.write((const char*)b, SAVE_SIZE); if (!f) return; }
-        std::remove(SAVE_FILE);
-        if (std::rename(tmp.c_str(), SAVE_FILE) != 0) std::remove(tmp.c_str());
+        std::remove(path.c_str());
+        if (std::rename(tmp.c_str(), path.c_str()) != 0) std::remove(tmp.c_str());
     }
-    bool readSave() {
-        std::ifstream f(SAVE_FILE, std::ios::binary); if (!f) return false;
+    bool readSave(const std::string& path) {
+        std::ifstream f(path, std::ios::binary); if (!f) return false;
         unsigned char b[SAVE_SIZE];
         if (!f.read((char*)b, SAVE_SIZE) || memcmp(b, "SSAV", 4) != 0 || b[4] != SAVE_VERSION || get32(b + 28) != crc32(b, 28)) return false;
         hiScore = (int)get32(b + 8);
@@ -3905,11 +3926,18 @@ struct Game {
             } }
         return any;
     }
-    void loadHiScore() {   // loads the whole save; creates it (migrating any old text files) if it's missing or invalid
-        if (readSave()) return;
+    // Loads the whole save from the user data folder; creates it if it's missing or invalid, migrating (once) a
+    // save file left next to the exe by an earlier version, or the even older per-topic text files.
+    void loadHiScore() {
+        if (readSave(savePath())) return;
+        if (readSave(LEGACY_SAVE_FILE)) {                                 // old location: move it
+            writeSave();
+            if (readSave(savePath())) std::remove(LEGACY_SAVE_FILE);
+            return;
+        }
         bool migrated = readLegacyFiles();
         writeSave();
-        if (migrated && readSave())                                      // only remove the old files once the new one is safe
+        if (migrated && readSave(savePath()))                            // only remove the old files once the new one is safe
             for (const char* fn : { LEGACY_HISCORE_FILE, LEGACY_SETTINGS_FILE, LEGACY_MEDALS_FILE }) std::remove(fn);
     }
     void saveSettings() { writeSave(); }

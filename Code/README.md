@@ -155,12 +155,18 @@ All sprites, monster animations, 3D asteroid atlases, sound effects and music ar
 
 ## Save file
 
-Everything the game remembers is kept in one small binary file, **`starswarm.sav`**, next to the exe: the high score, both mute settings, your medals, and the lifetime Courier and flak counters.
+Everything the game remembers is kept in one small binary file, **`starswarm.sav`**: the high score, both mute settings, your medals, and the lifetime Courier and flak counters. It lives in your user data folder, next to the startup cache, not in the game folder:
 
-- **Created automatically:** it's written on first launch, so there's nothing to set up.
-- **Checksummed:** it's 32 bytes with a CRC-32 checksum. If the file is damaged or edited by hand, the game ignores it and starts fresh with defaults.
-- **Written safely:** each save goes to a temporary file first and then replaces the old one, so a crash mid-save can't corrupt it.
-- **Upgrading from an older version:** the old `starswarm_highscore.txt`, `starswarm_settings.txt` and `starswarm_medals.txt` are read once, merged into `starswarm.sav`, and then deleted.
+- **Windows:** `%LOCALAPPDATA%\StarSwarm\starswarm.sav`
+- **Linux:** `~/.local/share/starswarm/starswarm.sav`
+- **Testing:** `STARSWARM_DATA_DIR` overrides the folder.
+
+How it works:
+
+- **Created automatically:** it's written on first launch.
+- **Checksummed:** it's 32 bytes with a CRC-32 checksum. If the file is damaged or edited by hand, the game ignores it and starts fresh.
+- **Written safely:** each save goes to a temporary file first and then replaces the old one.
+- **Upgrading from an older version:** a `starswarm.sav` left next to the exe is moved here automatically, and so are the even older `starswarm_highscore.txt`, `starswarm_settings.txt` and `starswarm_medals.txt` (merged, then deleted).
 - **To reset all progress:** delete `starswarm.sav`.
 
 ## GitHub auto-push
