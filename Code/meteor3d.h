@@ -147,7 +147,8 @@ inline Params params(int variant) {
 }
 
 // Build the 64-frame atlas for one rock. fallback: a static sprite rotated in 2D (if shaders fail).
-inline Texture2D atlas(int variant, const Texture2D* fallback = nullptr) {
+// keep: if set, also returns a CPU copy of the atlas (for the startup cache).
+inline Texture2D atlas(int variant, const Texture2D* fallback = nullptr, Image* keep = nullptr) {
     const int Wd = COLS * CELL, Ht = ROWS * CELL;
     RenderTexture2D rt = LoadRenderTexture(Wd, Ht);
     Shader sh = LoadShaderFromMemory(nullptr, FS);
@@ -192,6 +193,7 @@ inline Texture2D atlas(int variant, const Texture2D* fallback = nullptr) {
     EndTextureMode();
     Image img = LoadImageFromTexture(rt.texture);
     ImageFlipVertical(&img);
+    if (keep) *keep = ImageCopy(img);
     Texture2D t = LoadTextureFromImage(img);
     UnloadImage(img); UnloadRenderTexture(rt); UnloadTexture(wt);
     if (sh.id > 0 && ok) UnloadShader(sh);

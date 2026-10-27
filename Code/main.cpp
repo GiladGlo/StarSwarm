@@ -23,6 +23,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <ctime>
 #include <cctype>
 #include <algorithm>
@@ -88,61 +89,7 @@ struct Gfx {
         bossTex[i] = spr::bossShip(i, BOSS_N, &bossMask[i]);
         bossLoaded[i] = true;
     }
-    void load() {
-        const int N = 256;
-        player = spr::playerShip(320);
-        for (int i = 0; i < 5; ++i) playerRoll[i] = i == 2 ? player : spr::playerShip(320, -30.0f + 15 * i);
-        loadMonsters();
-        for (int i = 0; i < 7; ++i) {   // 64-frame 3D tumble atlases (GPU-rendered); old sprite = fallback
-            Texture2D flat = spr::meteor(192, i);
-            meteor[i] = m3d::atlas(i, &flat);
-            UnloadTexture(flat);
-        }
-        courier[0] = spr::courier(N, false); courier[1] = spr::courier(N, true);
-        drone = spr::wingDrone(N);
-        outpost = spr::miningOutpost(384);
-        glow = spr::glow(64);
-        nebula = spr::nebula(300, 400);
-    }
-    // CPU-render every monster frame on all cores (render() returns images via g_imgOut), then upload on this thread.
-    void loadMonsters() {
-        struct Job { int k, f; };
-        std::vector<Job> jobs;
-        for (int k = 0; k < MON_COUNT; ++k) for (int f = 0; f < MON_FRAMES; ++f) jobs.push_back({ k, f });
-        for (int b = 0; b < 10; ++b) jobs.push_back({ MON_COUNT + b, 0 });   // title-roster boss portraits
-        std::vector<Image> imgs(jobs.size());
-        std::atomic<int> next{ 0 };
-        auto worker = [&]() {
-            for (int j; (j = next++) < (int)jobs.size();) {
-                Image out{}; spr::g_imgOut = &out;
-                float ph = (float)jobs[j].f / MON_FRAMES;
-                if (jobs[j].k >= MON_COUNT) { spr::bossShip(jobs[j].k - MON_COUNT, 192, nullptr); spr::g_imgOut = nullptr; imgs[j] = out; continue; }
-                switch (jobs[j].k) {
-                    case MON_URCHIN:    spr::novaUrchin(MON_N, ph); break;
-                    case MON_MANTA:     spr::voidManta(MON_N, ph); break;
-                    case MON_JELLY:     spr::nebulaJelly(MON_N, ph, false); break;
-                    case MON_JELLY_HIT: spr::nebulaJelly(MON_N, ph, true); break;
-                    case MON_IMP:       spr::cometImp(MON_N, ph); break;
-                    case MON_BRUTE:     spr::asteroidBrute(MON_N, ph); break;
-                    case MON_LEVIATHAN: spr::cosmicLeviathan(MON_N, ph); break;
-                    default:            spr::leviathanSpawn(MON_N, ph); break;
-                }
-                spr::g_imgOut = nullptr;
-                imgs[j] = out;
-            }
-        };
-        int nt = std::max(1u, std::min(16u, std::thread::hardware_concurrency()));
-        std::vector<std::thread> pool;
-        for (int i = 0; i < nt; ++i) pool.emplace_back(worker);
-        for (auto& t : pool) t.join();
-        for (size_t j = 0; j < jobs.size(); ++j) {
-            Texture2D& t = jobs[j].k >= MON_COUNT ? bossIcon[jobs[j].k - MON_COUNT] : mon[jobs[j].k][jobs[j].f];
-            t = LoadTextureFromImage(imgs[j]);
-            UnloadImage(imgs[j]);
-            GenTextureMipmaps(&t);
-            SetTextureFilter(t, TEXTURE_FILTER_TRILINEAR);
-        }
-    }
+    // (filled in by the startup loader: generated on first run, then from the cache)
     void unload() {
         for (int i : { 0, 1, 3, 4 }) UnloadTexture(playerRoll[i]);
         for (auto& row : mon) for (auto& t : row) UnloadTexture(t);
@@ -270,9 +217,9 @@ static const sfx::Id SFX_SYNTH[SFX_COUNT] = { sfx::FIRE_PHOTON, sfx::HIT, sfx::B
     sfx::FIRE_SPREAD, sfx::FIRE_HOMING, sfx::FIRE_ION, sfx::LASER_LOOP, sfx::OVERHEAT, sfx::ION_BLAST, sfx::FLAK };
 static const int SFX_VOICES = 3;   // overlapping copies per sound (rapid fire / chained explosions)
 
-static Sound makeSound(SfxKind k) {
+// Sound from synthesised samples (from the startup cache or freshly rendered by sfxsynth.h)
+static Sound makeSound(SfxKind k, std::vector<float> v) {
     const int rate = 44100;
-    std::vector<float> v = sfx::render(SFX_SYNTH[k], (float)rate);
     if (k == SFX_LASER_LOOP) { std::vector<float> l; for (int r = 0; r < 4; ++r) l.insert(l.end(), v.begin(), v.end()); v.swap(l); }   // 4 s seamless loop
     short* data = (short*)malloc(sizeof(short) * v.size());
     for (size_t i = 0; i < v.size(); ++i) data[i] = (short)(Clamp(v[i], -1.0f, 1.0f) * 32767);
@@ -431,9 +378,9 @@ struct Game {
     Sound sfx[SFX_COUNT];
     Sound sfxVoice[SFX_COUNT][SFX_VOICES - 1]{};    // aliases sharing the sample data, so a sound can overlap itself
     int   sfxNext[SFX_COUNT]{};
-    void loadSfx() {
+    void loadSfx(const std::vector<std::vector<float>>& pcm) {
         for (int i = 0; i < SFX_COUNT; ++i) {
-            sfx[i] = makeSound((SfxKind)i);
+            sfx[i] = makeSound((SfxKind)i, pcm[i]);
             if (sfx[i].stream.buffer)   // no audio device: keep the empty sounds (playing them is a no-op)
                 for (int v = 0; v < SFX_VOICES - 1; ++v) { sfxVoice[i][v] = LoadSoundAlias(sfx[i]); SetSoundVolume(sfxVoice[i][v], sfx::gain(SFX_SYNTH[i])); }
         }
@@ -459,14 +406,14 @@ struct Game {
         for (size_t i = 0; i < v.size(); ++i) { int16_t x = (int16_t)(Clamp(v[i], -1.0f, 1.0f) * 32767); memcpy(&b[44 + i * 2], &x, 2); }
         return b;
     }
-    void loadTitleAudio(const std::vector<float>& music) {
+    void loadTitleAudio(const std::vector<float>& music, const std::vector<std::vector<float>>& fx) {
         const int rate = 44100;
         titleMusicWav = makeWav(music, rate);
         titleMusic = LoadMusicStreamFromMemory(".wav", titleMusicWav.data(), (int)titleMusicWav.size());
         titleMusicOk = titleMusic.stream.buffer != nullptr;
         if (titleMusicOk) titleMusic.looping = true;
         for (int k = 0; k < sfx::TFX_COUNT; ++k) {
-            std::vector<float> v = sfx::renderTitleFx((sfx::TitleFx)k, (float)rate);
+            const std::vector<float>& v = fx[k];
             short* data = (short*)malloc(sizeof(short) * v.size());
             for (size_t i = 0; i < v.size(); ++i) data[i] = (short)(Clamp(v[i], -1.0f, 1.0f) * 32767);
             Wave w{ (unsigned)v.size(), (unsigned)rate, 16, 1, data };
@@ -2993,6 +2940,45 @@ struct Game {
         font = GetFontDefault();
     }
 
+    // Loading screen: starfield, logo, status line and progress bar (drawn every frame while assets build)
+    void drawLoading(float p, const char* status, bool firstRun, float dt) {
+        computeView();
+        for (auto& st : stars) { st.pos.y += st.speed * 0.35f * dt; if (st.pos.y > H) { st.pos.y = 0; st.pos.x = frand(0, W); } }
+        loadT += dt;
+        BeginDrawing();
+        ClearBackground(BLACK);
+        BeginScissorMode((int)origin.x, (int)origin.y, (int)ceilf(W * scale), (int)ceilf(H * scale));
+        BeginMode2D(Camera2D{ origin, { 0, 0 }, 0, scale });
+        DrawRectangle(0, 0, W, H, Color{ 4, 4, 14, 255 });
+        for (auto& st : stars) DrawRectangleV(st.pos, { 1.6f, 1.6f }, Color{ 200, 215, 255, (unsigned char)(70 + 120 * (0.5f + 0.5f * sinf(loadT * 2 + st.phase))) });
+        Rectangle bar{ W / 2.0f - 180, 572, 360, 12 };
+        DrawRectangleRounded(bar, 1, 8, Color{ 25, 28, 50, 255 });
+        if (p > 0.01f) {
+            Rectangle fill{ bar.x, bar.y, bar.width * p, bar.height };
+            DrawRectangleRounded(fill, 1, 8, Color{ 70, 200, 255, 255 });
+            float sx = fmodf(loadT * 260, bar.width + 80) - 40;     // moving shine
+            if (sx < fill.width) for (int i = 0; i < 30; ++i) { float x = bar.x + sx - 30 + i * 2; if (x >= bar.x && x <= bar.x + fill.width - 2)
+                DrawRectangleV({ x, bar.y + 1 }, { 2, bar.height - 2 }, Color{ 255, 255, 255, (unsigned char)(i * 4) }); }
+        }
+        DrawRectangleRoundedLinesEx({ bar.x - 2, bar.y - 2, bar.width + 4, bar.height + 4 }, 1, 8, 1.2f, Color{ 90, 120, 180, 160 });
+        EndMode2D();
+        drawCentered("STAR", 190, 92, Color{ 90, 200, 200, 255 });
+        drawCentered("SWARM", 290, 92, Color{ 230, 190, 90, 255 });
+        drawCentered("Ten sectors. Ten capital ships. One pilot.", 405, 15, Color{ 150, 155, 185, 255 });
+        bool busy = strcmp(status, "Ready") != 0;
+        int dots = (int)(loadT / 0.3f) % 3 + 1;
+        {   // centre on the text without the animated dots, so the line doesn't jitter
+            float fs = 17 * scale, sp = customFont ? fs * 0.04f : fs / 10, w = MeasureTextEx(font, status, fs, sp).x / scale;
+            text(busy ? TextFormat("%s%.*s", status, dots, "...") : status, W / 2.0f - w / 2, 540, 17, Color{ 200, 210, 235, 255 });
+        }
+        drawCentered(TextFormat("%d%%", (int)(p * 100)), 594, 13, Color{ 140, 150, 180, 255 });
+        if (firstRun) drawCentered("First launch: building graphics and music. Later launches are much faster.", 640, 11, Color{ 110, 115, 145, 255 });
+        drawCentered("DEVELOPED BY GILAD GLOBEN", 760, 11, Color{ 90, 95, 125, 255 });
+        EndScissorMode();
+        EndDrawing();
+    }
+    float loadT = 0;
+
     void computeView() {
         float sw = (float)GetScreenWidth(), sh = (float)GetScreenHeight();
         scale  = std::min(sw / W, sh / H);
@@ -3940,6 +3926,348 @@ extern "C" {
 #endif
 
 // ----------------------------------------------------------------------------
+// ============================================================== STARTUP: LOADING SCREEN + CACHE ==
+// Everything the game generates at startup (sprites, monster animations, 3D asteroid atlases, sound effects
+// and music) is built while a loading screen keeps the window alive. The results are saved to a compressed
+// cache in the user's local app-data folder, so later launches only decompress and upload them.
+//
+// The cache is used only if all of these match: magic + format version, the content fingerprint baked in at
+// build time (CONTENT_HASH: a hash of the generator sources), the generation parameters, the exact asset
+// list, and a CRC-32 over the whole file. Anything else means "rebuild it": the cache is never required.
+#if __has_include("contenthash.h")
+#include "contenthash.h"
+#endif
+#ifndef CONTENT_HASH
+#define CONTENT_HASH "dev"
+#endif
+
+namespace startup {
+
+enum Group { G_GAMEMUSIC, G_TITLEMUSIC, G_PLAYER, G_MON, G_BOSSICON, G_METEORFLAT, G_COURIER, G_DRONE, G_OUTPOST,
+             G_SFX, G_TITLEFX, G_METEOR, G_COUNT };
+struct Spec { Group g; int a, b; std::string name; int weight; };
+struct Asset { int w = 0, h = 0; std::vector<unsigned char> rgba; std::vector<float> pcm; };
+
+static const int CACHE_FORMAT = 1;
+// generation settings that change the output without touching the generator sources
+static std::string genParams() {
+    return TextFormat("player=320 mon=%d x%d bossicon=192 courier=256 drone=256 outpost=384 meteor=%dx%d@%d rate=44100",
+                      Gfx::MON_N, Gfx::MON_FRAMES, m3d::COLS, m3d::ROWS, m3d::CELL);
+}
+
+// The full asset list. Meteor "flats" are only a fallback input for the GPU atlases, so they are never cached.
+static std::vector<Spec> manifest() {
+    std::vector<Spec> m;
+    for (int k = 0; k < sfx::GT_COUNT; ++k) m.push_back({ G_GAMEMUSIC, k, 0, TextFormat("gamemusic%d", k), 30 });
+    m.push_back({ G_TITLEMUSIC, 0, 0, "titlemusic", 24 });
+    for (int i = 0; i < 5; ++i) m.push_back({ G_PLAYER, i, 0, TextFormat("player%d", i), 8 });
+    for (int k = 0; k < Gfx::MON_COUNT; ++k) for (int f = 0; f < Gfx::MON_FRAMES; ++f) m.push_back({ G_MON, k, f, TextFormat("mon%d_%d", k, f), 3 });
+    for (int b = 0; b < 10; ++b) m.push_back({ G_BOSSICON, b, 0, TextFormat("bossicon%d", b), 3 });
+    for (int i = 0; i < 7; ++i) m.push_back({ G_METEORFLAT, i, 0, TextFormat("meteorflat%d", i), 1 });
+    for (int i = 0; i < 2; ++i) m.push_back({ G_COURIER, i, 0, TextFormat("courier%d", i), 3 });
+    m.push_back({ G_DRONE, 0, 0, "drone", 2 });
+    m.push_back({ G_OUTPOST, 0, 0, "outpost", 4 });
+    for (int k = 0; k < SFX_COUNT; ++k) m.push_back({ G_SFX, k, 0, TextFormat("sfx%d", k), 1 });
+    for (int k = 0; k < sfx::TFX_COUNT; ++k) m.push_back({ G_TITLEFX, k, 0, TextFormat("titlefx%d", k), 1 });
+    for (int i = 0; i < 7; ++i) m.push_back({ G_METEOR, i, 0, TextFormat("meteor%d", i), 6 });
+    return m;
+}
+static bool cached(Group g) { return g != G_METEORFLAT; }
+static bool gpuJob(Group g) { return g == G_METEOR; }
+
+// What the loading screen says while a group is being built (in the order players notice them)
+static const char* statusFor(Group g) {
+    switch (g) {
+        case G_PLAYER: return "Building your starfighter";
+        case G_MON: case G_BOSSICON: return "Hatching space monsters";
+        case G_METEORFLAT: case G_METEOR: return "Sculpting asteroids";
+        case G_COURIER: case G_DRONE: case G_OUTPOST: return "Fitting out the Couriers";
+        case G_GAMEMUSIC: case G_TITLEMUSIC: return "Composing the soundtrack";
+        default: return "Tuning sound effects";
+    }
+}
+
+// CPU generation (worker threads): sprites come back as images through spr::g_imgOut
+static void generate(const Spec& s, Asset& out) {
+    auto grab = [&](auto&& fn) {
+        Image img{}; spr::g_imgOut = &img; fn(); spr::g_imgOut = nullptr;
+        out.w = img.width; out.h = img.height;
+        out.rgba.assign((unsigned char*)img.data, (unsigned char*)img.data + (size_t)img.width * img.height * 4);
+        UnloadImage(img);
+    };
+    float ph = (float)s.b / Gfx::MON_FRAMES;
+    switch (s.g) {
+        case G_GAMEMUSIC:  out.pcm = sfx::renderGameTrack((sfx::GameTrack)s.a, 44100); break;
+        case G_TITLEMUSIC: out.pcm = sfx::renderTitleMusic(44100); break;
+        case G_SFX:        out.pcm = sfx::render(SFX_SYNTH[s.a], 44100); break;
+        case G_TITLEFX:    out.pcm = sfx::renderTitleFx((sfx::TitleFx)s.a, 44100); break;
+        case G_PLAYER:     grab([&] { spr::playerShip(320, s.a == 2 ? 0.0f : -30.0f + 15 * s.a); }); break;
+        case G_BOSSICON:   grab([&] { spr::bossShip(s.a, 192, nullptr); }); break;
+        case G_METEORFLAT: grab([&] { spr::meteor(192, s.a); }); break;
+        case G_COURIER:    grab([&] { spr::courier(256, s.a == 1); }); break;
+        case G_DRONE:      grab([&] { spr::wingDrone(256); }); break;
+        case G_OUTPOST:    grab([&] { spr::miningOutpost(384); }); break;
+        case G_MON:
+            grab([&] { switch (s.a) {
+                case Gfx::MON_URCHIN:    spr::novaUrchin(Gfx::MON_N, ph); break;
+                case Gfx::MON_MANTA:     spr::voidManta(Gfx::MON_N, ph); break;
+                case Gfx::MON_JELLY:     spr::nebulaJelly(Gfx::MON_N, ph, false); break;
+                case Gfx::MON_JELLY_HIT: spr::nebulaJelly(Gfx::MON_N, ph, true); break;
+                case Gfx::MON_IMP:       spr::cometImp(Gfx::MON_N, ph); break;
+                case Gfx::MON_BRUTE:     spr::asteroidBrute(Gfx::MON_N, ph); break;
+                case Gfx::MON_LEVIATHAN: spr::cosmicLeviathan(Gfx::MON_N, ph); break;
+                default:                 spr::leviathanSpawn(Gfx::MON_N, ph); break; } });
+            break;
+        default: break;
+    }
+}
+
+static Texture2D upload(const Asset& a, bool mips = true) {
+    Image img{ (void*)a.rgba.data(), a.w, a.h, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8 };
+    Texture2D t = LoadTextureFromImage(img);
+    if (mips) GenTextureMipmaps(&t);
+    SetTextureFilter(t, TEXTURE_FILTER_TRILINEAR);
+    return t;
+}
+
+// ---- cache file ----
+static std::string cachePath() {
+    if (const char* o = getenv("STARSWARM_CACHE_DIR")) return std::string(o) + "/startup.cache";
+#ifdef _WIN32
+    const char* base = getenv("LOCALAPPDATA");
+    return base ? std::string(base) + "\\StarSwarm\\startup.cache" : std::string("startup.cache");
+#else
+    if (const char* x = getenv("XDG_CACHE_HOME")) return std::string(x) + "/starswarm/startup.cache";
+    if (const char* h = getenv("HOME")) return std::string(h) + "/.cache/starswarm/startup.cache";
+    return "startup.cache";
+#endif
+}
+static uint32_t crc32(const unsigned char* p, size_t n) {
+    static uint32_t T[256]; static bool init = false;
+    if (!init) { for (uint32_t i = 0; i < 256; ++i) { uint32_t c = i; for (int k = 0; k < 8; ++k) c = (c >> 1) ^ (0xEDB88320u & (0u - (c & 1u))); T[i] = c; } init = true; }
+    uint32_t c = 0xFFFFFFFFu;
+    for (size_t i = 0; i < n; ++i) c = T[(c ^ p[i]) & 0xFF] ^ (c >> 8);
+    return ~c;
+}
+struct Writer { std::vector<unsigned char> b;
+    void u32(uint32_t v) { for (int i = 0; i < 4; ++i) b.push_back((unsigned char)(v >> (8 * i))); }
+    void str(const std::string& s) { u32((uint32_t)s.size()); b.insert(b.end(), s.begin(), s.end()); }
+    void raw(const unsigned char* p, size_t n) { b.insert(b.end(), p, p + n); } };
+struct Reader { const unsigned char* p; size_t n, i = 0; bool ok = true;
+    uint32_t u32() { if (i + 4 > n) { ok = false; return 0; } uint32_t v = 0; for (int k = 0; k < 4; ++k) v |= (uint32_t)p[i + k] << (8 * k); i += 4; return v; }
+    std::string str() { uint32_t len = u32(); if (!ok || i + len > n) { ok = false; return ""; } std::string s((const char*)p + i, len); i += len; return s; } };
+
+static std::vector<unsigned char> payloadOf(const Asset& a) {   // images as RGBA8, sound as 16-bit samples
+    if (!a.pcm.empty()) { std::vector<unsigned char> v(a.pcm.size() * 2);
+        for (size_t i = 0; i < a.pcm.size(); ++i) { int16_t s = (int16_t)(std::clamp(a.pcm[i], -1.0f, 1.0f) * 32767); memcpy(&v[i * 2], &s, 2); }
+        return v; }
+    return a.rgba;
+}
+
+// Compress every asset on all cores and write the file (atomically: temp file, then rename)
+static void saveCache(const std::vector<Spec>& specs, const std::vector<Asset>& assets) {
+    std::vector<std::vector<unsigned char>> comp(specs.size()); std::vector<uint32_t> rawSize(specs.size(), 0);
+    std::atomic<int> next{ 0 };
+    auto worker = [&] {
+        for (int j; (j = next++) < (int)specs.size();) {
+            if (!cached(specs[j].g)) continue;
+            std::vector<unsigned char> raw = payloadOf(assets[j]); rawSize[j] = (uint32_t)raw.size();
+            int cs = 0; unsigned char* c = CompressData(raw.data(), (int)raw.size(), &cs);
+            if (c) { comp[j].assign(c, c + cs); MemFree(c); }
+        }
+    };
+    int nt = std::max(1, (int)std::thread::hardware_concurrency() - 1);
+    std::vector<std::thread> pool; for (int i = 0; i < nt; ++i) pool.emplace_back(worker); for (auto& t : pool) t.join();
+    Writer w;
+    w.raw((const unsigned char*)"SSCACHE1", 8); w.u32(CACHE_FORMAT); w.str(CONTENT_HASH); w.str(genParams());
+    uint32_t n = 0; for (auto& s : specs) n += cached(s.g);
+    w.u32(n);
+    for (size_t j = 0; j < specs.size(); ++j) {
+        if (!cached(specs[j].g)) continue;
+        if (comp[j].empty()) return;                      // compression failed: don't write a partial cache
+        w.str(specs[j].name); w.u32(assets[j].pcm.empty() ? 0 : 1); w.u32((uint32_t)assets[j].w); w.u32((uint32_t)assets[j].h);
+        w.u32(rawSize[j]); w.u32((uint32_t)comp[j].size()); w.raw(comp[j].data(), comp[j].size());
+    }
+    w.u32(crc32(w.b.data(), w.b.size()));
+    std::string path = cachePath(), dir = GetDirectoryPath(path.c_str()), tmp = path + ".tmp";
+    if (!dir.empty() && !DirectoryExists(dir.c_str())) MakeDirectory(dir.c_str());
+    { std::ofstream f(tmp, std::ios::binary); if (!f) return; f.write((const char*)w.b.data(), (std::streamsize)w.b.size()); if (!f) { f.close(); std::remove(tmp.c_str()); return; } }
+    std::remove(path.c_str());
+    if (std::rename(tmp.c_str(), path.c_str()) != 0) std::remove(tmp.c_str());
+}
+
+// Read + verify + decompress (worker thread). Returns false on any mismatch or damage.
+static bool loadCache(const std::vector<Spec>& specs, std::vector<Asset>& assets, std::atomic<int>& progressUnits) {
+    std::ifstream f(cachePath(), std::ios::binary | std::ios::ate); if (!f) return false;
+    std::streamsize sz = f.tellg(); if (sz < 64) return false;
+    std::vector<unsigned char> buf((size_t)sz); f.seekg(0); if (!f.read((char*)buf.data(), sz)) return false;
+    uint32_t stored = 0; for (int k = 0; k < 4; ++k) stored |= (uint32_t)buf[buf.size() - 4 + k] << (8 * k);
+    if (crc32(buf.data(), buf.size() - 4) != stored) return false;
+    Reader r{ buf.data(), buf.size() - 4 };
+    if (memcmp(buf.data(), "SSCACHE1", 8) != 0) return false; r.i = 8;
+    if (r.u32() != (uint32_t)CACHE_FORMAT || r.str() != CONTENT_HASH || r.str() != genParams()) return false;
+    uint32_t n = r.u32(); uint32_t want = 0; for (auto& s : specs) want += cached(s.g);
+    if (!r.ok || n != want) return false;
+    struct Ent { size_t j, off; uint32_t isPcm, w, h, raw, comp; };
+    std::vector<Ent> ents;
+    for (size_t j = 0; j < specs.size(); ++j) {
+        if (!cached(specs[j].g)) continue;
+        Ent e{}; e.j = j;
+        if (r.str() != specs[j].name) return false;
+        e.isPcm = r.u32(); e.w = r.u32(); e.h = r.u32(); e.raw = r.u32(); e.comp = r.u32();
+        if (!r.ok || r.i + e.comp > r.n) return false;
+        e.off = r.i; r.i += e.comp; ents.push_back(e);
+    }
+    std::atomic<int> next{ 0 }; std::atomic<bool> bad{ false };
+    auto worker = [&] {
+        for (int k; (k = next++) < (int)ents.size() && !bad;) {
+            const Ent& e = ents[k]; int rs = 0;
+            unsigned char* d = DecompressData(buf.data() + e.off, (int)e.comp, &rs);
+            if (!d || (uint32_t)rs != e.raw) { if (d) MemFree(d); bad = true; return; }
+            Asset& a = assets[e.j]; a.w = (int)e.w; a.h = (int)e.h;
+            if (e.isPcm) { a.pcm.resize(rs / 2); for (size_t i = 0; i < a.pcm.size(); ++i) { int16_t s; memcpy(&s, d + i * 2, 2); a.pcm[i] = s / 32767.0f; } }
+            else { if ((size_t)rs != (size_t)e.w * e.h * 4) { MemFree(d); bad = true; return; } a.rgba.assign(d, d + rs); }
+            MemFree(d);
+            progressUnits += specs[e.j].weight * 85;   // decompressing = first 85% of the bar, uploading the rest
+        }
+    };
+    int nt = std::max(1, (int)std::thread::hardware_concurrency() - 1);
+    std::vector<std::thread> pool; for (int i = 0; i < nt; ++i) pool.emplace_back(worker); for (auto& t : pool) t.join();
+    return !bad;
+}
+
+// ---- the loader: runs on worker threads while the main thread keeps drawing the loading screen ----
+struct Loader {
+    std::vector<Spec> specs = manifest();
+    std::vector<Asset> assets = std::vector<Asset>(specs.size());
+    std::vector<std::atomic<bool>> ready = std::vector<std::atomic<bool>>(specs.size());
+    std::atomic<int> unitsDone{ 0 }; int unitsTotal = 0;    // progress in weight x 100 units
+    std::atomic<int> lastGroup{ G_PLAYER };                 // most recently started non-music job (for the status line)
+    std::atomic<bool> cancel{ false }, cacheDone{ false }, cacheOk{ false };
+    std::vector<std::thread> pool;
+    std::thread cacheThread, saveThread;
+    enum Phase { READ_CACHE, GENERATE, UPLOAD, DONE } phase = READ_CACHE;
+    bool fromCache = false, firstRun = false;
+    size_t uploadNext = 0;
+    Texture2D flats[7]{}; int nextMeteor = 0;
+
+    void start() {
+        for (auto& s : specs) unitsTotal += s.weight * 100;
+        for (auto& r : ready) r = false;
+        firstRun = !FileExists(cachePath().c_str());
+        if (getenv("STARSWARM_NO_CACHE")) firstRun = true;
+        if (firstRun) { startGenerate(); return; }
+        cacheThread = std::thread([this] { cacheOk = loadCache(specs, assets, unitsDone); cacheDone = true; });
+    }
+    void startGenerate() {
+        phase = GENERATE; unitsDone = 0;
+        for (auto& a : assets) a = Asset{};
+        std::shared_ptr<std::atomic<int>> next = std::make_shared<std::atomic<int>>(0);
+        auto worker = [this, next] {
+            for (int j; !cancel && (j = (*next)++) < (int)specs.size();) {
+                if (gpuJob(specs[j].g)) continue;
+                if (specs[j].g != G_GAMEMUSIC && specs[j].g != G_TITLEMUSIC) lastGroup = specs[j].g;
+                generate(specs[j], assets[j]);
+                ready[j] = true; unitsDone += specs[j].weight * 100;
+            }
+        };
+        int nt = std::max(1, (int)std::thread::hardware_concurrency() - 1);   // leave a core for the loading screen
+        for (int i = 0; i < nt; ++i) pool.emplace_back(worker);
+    }
+    // Called once per frame on the main thread. Returns true when everything is ready.
+    bool step(Game& game) {
+        if (phase == READ_CACHE) {
+            if (!cacheDone) return false;
+            cacheThread.join();
+            if (cacheOk) { fromCache = true; phase = UPLOAD; unitsDone = unitsTotal * 85 / 100; }
+            else { firstRun = true; startGenerate(); }
+            return false;
+        }
+        if (phase == GENERATE) {
+            // GPU work on the main thread: one asteroid atlas per frame once its flat fallback sprite exists
+            if (nextMeteor < 7) {
+                size_t fj = 0, mj = 0;
+                for (size_t j = 0; j < specs.size(); ++j) { if (specs[j].g == G_METEORFLAT && specs[j].a == nextMeteor) fj = j; if (specs[j].g == G_METEOR && specs[j].a == nextMeteor) mj = j; }
+                if (ready[fj]) {
+                    lastGroup = G_METEOR;
+                    flats[nextMeteor] = upload(assets[fj], false);
+                    Image keep{};
+                    gfx.meteor[nextMeteor] = m3d::atlas(nextMeteor, &flats[nextMeteor], &keep);
+                    assets[mj].w = keep.width; assets[mj].h = keep.height;
+                    assets[mj].rgba.assign((unsigned char*)keep.data, (unsigned char*)keep.data + (size_t)keep.width * keep.height * 4);
+                    UnloadImage(keep); UnloadTexture(flats[nextMeteor]);
+                    ready[mj] = true; unitsDone += specs[mj].weight * 100; ++nextMeteor;
+                }
+            }
+            for (size_t j = 0; j < specs.size(); ++j) if (!ready[j]) return false;
+            for (auto& t : pool) t.join(); pool.clear();
+            phase = UPLOAD;
+            return false;
+        }
+        if (phase == UPLOAD) {
+            // spread the GPU uploads over a few frames so the loading screen keeps moving
+            double t0 = GetTime();
+            while (uploadNext < specs.size() && GetTime() - t0 < 0.03) apply(game, uploadNext++);
+            if (uploadNext < specs.size()) { unitsDone = std::max(unitsDone.load(), (int)(unitsTotal * (0.85 + 0.15 * uploadNext / specs.size()))); return false; }
+            finish(game);
+            phase = DONE;
+            unitsDone = unitsTotal;
+        }
+        return phase == DONE;
+    }
+    std::vector<std::vector<float>> sfxPcm = std::vector<std::vector<float>>(SFX_COUNT), titleFxPcm = std::vector<std::vector<float>>(sfx::TFX_COUNT),
+                                    gameMusicPcm = std::vector<std::vector<float>>(sfx::GT_COUNT);
+    std::vector<float> titleMusicPcm;
+    void apply(Game& game, size_t j) {
+        const Spec& s = specs[j]; Asset& a = assets[j]; (void)game;
+        switch (s.g) {
+            case G_PLAYER:   gfx.playerRoll[s.a] = upload(a); if (s.a == 2) gfx.player = gfx.playerRoll[2]; break;
+            case G_MON:      gfx.mon[s.a][s.b] = upload(a); break;
+            case G_BOSSICON: gfx.bossIcon[s.a] = upload(a); break;
+            case G_COURIER:  gfx.courier[s.a] = upload(a); break;
+            case G_DRONE:    gfx.drone = upload(a); break;
+            case G_OUTPOST:  gfx.outpost = upload(a); break;
+            case G_METEOR:   if (fromCache) gfx.meteor[s.a] = upload(a); break;   // generated atlases are already on the GPU
+            case G_SFX:      sfxPcm[s.a] = a.pcm; break;
+            case G_TITLEFX:  titleFxPcm[s.a] = a.pcm; break;
+            case G_TITLEMUSIC: titleMusicPcm = a.pcm; break;
+            case G_GAMEMUSIC:  gameMusicPcm[s.a] = a.pcm; break;
+            default: break;
+        }
+    }
+    void finish(Game& game) {
+        gfx.glow = spr::glow(64);
+        gfx.nebula = spr::nebula(300, 400);
+        game.loadSfx(sfxPcm);
+        game.loadTitleAudio(titleMusicPcm, titleFxPcm);
+        game.loadGameMusic(gameMusicPcm);
+        sfxPcm.clear(); titleFxPcm.clear(); titleMusicPcm.clear();
+        if (!fromCache && !getenv("STARSWARM_NO_CACHE"))   // write the cache in the background; the game starts right away
+            saveThread = std::thread([this] { saveCache(specs, assets); assets.clear(); });
+        else assets.clear();
+    }
+    const char* status() const {
+        if (phase == READ_CACHE) return "Loading";
+        if (phase == UPLOAD || phase == DONE) return fromCache ? "Loading" : "Ready";
+        bool musicLeft = false;
+        for (size_t j = 0; j < specs.size(); ++j) if (!ready[j]) {
+            if (specs[j].g == G_GAMEMUSIC || specs[j].g == G_TITLEMUSIC) musicLeft = true;
+            else return statusFor((Group)lastGroup.load());
+        }
+        return musicLeft ? statusFor(G_GAMEMUSIC) : "Ready";
+    }
+    float progress() const { return std::clamp((float)unitsDone / std::max(1, unitsTotal), 0.0f, 1.0f); }
+    void shutdown() {   // on exit: stop generating, but let a cache write finish so the file is never half-written
+        cancel = true;
+        for (auto& t : pool) if (t.joinable()) t.join();
+        if (cacheThread.joinable()) cacheThread.join();
+        if (saveThread.joinable()) saveThread.join();
+    }
+};
+
+} // namespace startup
+
+
 int main(int argc, char** argv) {
     // --selftest: auto-plays for a few seconds, saves a screenshot, exits (for CI/headless checks)
     bool selftest = argc > 1 && std::string(argv[1]) == "--selftest";
@@ -3964,20 +4292,19 @@ int main(int argc, char** argv) {
     SetRandomSeed((unsigned)std::time(nullptr));
 
     static Game game;
-    game.loadSfx();
     game.initStars();
     game.loadHiScore();
     game.loadFont();
+    // Build (or load from the cache) all sprites, asteroid atlases, sounds and music behind a live loading screen
+    static startup::Loader loader;
+    loader.start();
+    for (;;) {
+        if (WindowShouldClose()) { loader.shutdown(); CloseAudioDevice(); CloseWindow(); return 0; }
+        bool done = loader.step(game);
+        game.drawLoading(loader.progress(), loader.status(), loader.firstRun, std::min(GetFrameTime(), 0.05f));
+        if (done) break;
+    }
     game.buildTitleParticles();
-    std::vector<float> titleMusicPcm;
-    std::vector<std::vector<float>> gameMusicPcm(sfx::GT_COUNT);
-    std::vector<std::thread> musicJobs;                                    // synthesise all music while the graphics render
-    musicJobs.emplace_back([&] { titleMusicPcm = sfx::renderTitleMusic(44100); });
-    for (int k = 0; k < sfx::GT_COUNT; ++k) musicJobs.emplace_back([&, k] { gameMusicPcm[k] = sfx::renderGameTrack((sfx::GameTrack)k, 44100); });
-    gfx.load();
-    for (auto& j : musicJobs) j.join();
-    game.loadTitleAudio(titleMusicPcm);
-    game.loadGameMusic(gameMusicPcm);
     if (selftest) {
         int st = (argc > 3 && isdigit((unsigned char)argv[3][0])) ? atoi(argv[3]) : 1;
         if (argc > 3 && std::string(argv[3]) == "boss") st = CYCLE;
@@ -4027,6 +4354,7 @@ int main(int argc, char** argv) {
     if (game.customFont) UnloadFont(game.font);
     gfx.unload();
     rumble::set(0, 0, 0);
+    loader.shutdown();                                  // let a first-run cache write finish
     game.unloadGameMusic();
     game.unloadTitleAudio();
     game.unloadSfx();

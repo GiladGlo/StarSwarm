@@ -138,6 +138,21 @@ All regular enemies are space monsters with smooth looping animation (8 frames e
 
 Extra ship at 20,000, then every 50,000. Each stage gets faster, with more simultaneous divers and more enemy fire.
 
+## Loading screen and startup cache
+
+All sprites, monster animations, 3D asteroid atlases, sound effects and music are generated in code. That work now runs on background threads behind a loading screen, so the window never sits frozen or white. The screen shows the starfield, the logo, a status line (*Building your starfighter… Hatching space monsters… Sculpting asteroids… Composing the soundtrack…*) and a progress bar.
+
+- **First launch:** the game builds everything, then saves it in the background to a compressed cache (about 36 MB) at `%LOCALAPPDATA%\StarSwarm\startup.cache` (`~/.cache/starswarm/` on Linux).
+- **Later launches:** the cache is decompressed on all cores and uploaded, which takes about a second.
+- **Rebuilding:** the cache is rebuilt automatically when any of these doesn't match:
+  - the content fingerprint, a SHA-1 of the art and sound generator sources (`sprites.h`, `monsters.h`, `meteor3d.h`, `sfxsynth.h`, `titlemusic.h`, `gamemusic.h`). CMake bakes it into `contenthash.h` at build time.
+  - the cache format version or generation settings
+  - the exact asset list
+  - a CRC-32 over the whole file
+
+  Changes to gameplay code keep the cache valid. A damaged file is ignored and rebuilt, and deleting it is always safe.
+- **Environment variables:** `STARSWARM_CACHE_DIR` moves the cache; `STARSWARM_NO_CACHE=1` disables it, for testing.
+
 ## Save file
 
 Everything the game remembers is kept in one small binary file, **`starswarm.sav`**, next to the exe: the high score, both mute settings, your medals, and the lifetime Courier and flak counters.
