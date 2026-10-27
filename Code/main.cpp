@@ -35,9 +35,12 @@ static const float  PLAYER_MARGIN_X = 34.0f;      // keep the whole ship and its
 static const float  PLAYER_Y_LOW    = 800 - 70.0f;   // lowest position (the original fixed row)
 static const float  PLAYER_Y_HIGH   = 800 - 490.0f;  // how far up the ship may fly (lower ~60% of the screen)
 static const size_t MAX_TORPEDOES = 5;          // projectiles allowed on screen at once
-static const char* HISCORE_FILE = "starswarm_highscore.txt";
-static const char* MEDALS_FILE   = "starswarm_medals.txt";     // medals=0101..., lifetime courier/flak counters
-static const char* SETTINGS_FILE = "starswarm_settings.txt";   // title_muted=0/1, game_music_muted=0/1
+// Everything the game remembers (high score, mute settings, medals, lifetime counters) lives in one small binary
+// save file next to the exe; it is created on first run. The old text files are migrated once, then removed.
+static const char* SAVE_FILE = "starswarm.sav";
+static const char* LEGACY_HISCORE_FILE  = "starswarm_highscore.txt";
+static const char* LEGACY_MEDALS_FILE   = "starswarm_medals.txt";
+static const char* LEGACY_SETTINGS_FILE = "starswarm_settings.txt";
 
 // ----------------------------------------------------------------------------
 //  Utility
@@ -3395,19 +3398,7 @@ struct Game {
     static constexpr Rectangle MEDAL_BTN{ 60, 754, 34, 34 };
     static constexpr Rectangle MEDAL_PANEL{ 30, 90, 540, 620 };
 
-    void loadMedals() {
-        std::ifstream f(MEDALS_FILE); std::string line;
-        while (f && std::getline(f, line)) {
-            if (line.rfind("medals=", 0) == 0) for (int i = 0; i < MD_COUNT && 7 + i < (int)line.size(); ++i) medal[i] = line[7 + i] == '1';
-            else if (line.rfind("couriers=", 0) == 0) courierKillsTotal = atoi(line.c_str() + 9);
-            else if (line.rfind("flak=", 0) == 0) flakShotTotal = atoi(line.c_str() + 5);
-        }
-    }
-    void saveMedals() {
-        std::ofstream f(MEDALS_FILE); if (!f) return;
-        f << "medals="; for (int i = 0; i < MD_COUNT; ++i) f << (medal[i] ? '1' : '0');
-        f << "\ncouriers=" << courierKillsTotal << "\nflak=" << flakShotTotal << "\n";
-    }
+    void saveMedals() { writeSave(); }
     int medalCount() const { int n = 0; for (bool m : medal) n += m; return n; }
     void unlockMedal(int id) {
         if (debugRun || medal[id]) return;              // debug runs never earn medals
@@ -3621,7 +3612,7 @@ struct Game {
     Color rosterPodCol() const { int i = (int)fmodf(time * 0.8f, 6.0f); return i == 0 ? UPG_COL : WCOL[i < 5 ? i : 4]; }
 
     // ---- Title-screen mute button (bottom-left, icon only): click or M toggles title music + effects ----
-    bool titleMuted = false;                            // saved in SETTINGS_FILE; gameplay sound is never affected
+    bool titleMuted = false;                            // saved in SAVE_FILE; gameplay sound is never affected
     static constexpr Rectangle MUTE_BTN{ 18, 754, 34, 34 };
     void toggleTitleMute() {
         titleMuted = !titleMuted;
@@ -3649,7 +3640,7 @@ struct Game {
     void drawMuteButtonShapes() { drawSpeakerButton(MUTE_BTN, titleMuted, CheckCollisionPointRec(mouseLogical(), MUTE_BTN)); }
 
     // ---- In-game music mute button (top-right corner, icon only): click or M; mutes only the background music ----
-    bool gameMusicMuted = false;                       // saved in SETTINGS_FILE
+    bool gameMusicMuted = false;                       // saved in SAVE_FILE
     static constexpr Rectangle GAME_MUTE_BTN{ W - 36.0f, 8, 28, 28 };
     bool gameMuteVisible() const { return mode == PLAYING; }
     void toggleGameMusicMute() { gameMusicMuted = !gameMusicMuted; saveSettings(); }
@@ -3877,16 +3868,66 @@ struct Game {
         }
     }
 
-    // --- persistence ----------------------------------------------------------
-    void loadHiScore() { std::ifstream f(HISCORE_FILE); if (f) f >> hiScore; loadSettings(); loadMedals(); }
-    void loadSettings() { std::ifstream f(SETTINGS_FILE); std::string line;
-        while (f && std::getline(f, line)) {
-            if (line.rfind("title_muted=", 0) == 0) titleMuted = line.size() > 12 && line[12] == '1';
-            if (line.rfind("game_music_muted=", 0) == 0) gameMusicMuted = line.size() > 17 && line[17] == '1';
-        } }
-    void saveSettings() { std::ofstream f(SETTINGS_FILE);
-        if (f) f << "title_muted=" << (titleMuted ? 1 : 0) << "\n" << "game_music_muted=" << (gameMusicMuted ? 1 : 0) << "\n"; }
-    void saveHiScore() { if (debugRun) return; std::ofstream f(HISCORE_FILE); if (f) f << hiScore; }
+    // --- persistence: one binary save file -------------------------------------
+    // Layout (32 bytes, little-endian): "SSAV" | u16 version (1) | u16 size (32) | i32 high score | u32 medal bits |
+    // i32 lifetime Courier kills | i32 lifetime flak shot down | u8 flags (bit0 title muted, bit1 game music muted) |
+    // 3 reserved | u32 CRC-32 of the first 28 bytes. A missing, damaged or tampered file falls back to defaults.
+    static constexpr int SAVE_SIZE = 32, SAVE_VERSION = 1;
+    static uint32_t crc32(const unsigned char* p, size_t n) {
+        uint32_t c = 0xFFFFFFFFu;
+        for (size_t i = 0; i < n; ++i) { c ^= p[i]; for (int k = 0; k < 8; ++k) c = (c >> 1) ^ (0xEDB88320u & (0u - (c & 1u))); }
+        return ~c;
+    }
+    static void put32(unsigned char* p, uint32_t v) { for (int i = 0; i < 4; ++i) p[i] = (unsigned char)(v >> (8 * i)); }
+    static uint32_t get32(const unsigned char* p) { uint32_t v = 0; for (int i = 0; i < 4; ++i) v |= (uint32_t)p[i] << (8 * i); return v; }
+    void writeSave() {
+        unsigned char b[SAVE_SIZE] = {};
+        memcpy(b, "SSAV", 4); b[4] = SAVE_VERSION; b[5] = 0; b[6] = SAVE_SIZE; b[7] = 0;
+        uint32_t bits = 0; for (int i = 0; i < MD_COUNT; ++i) if (medal[i]) bits |= 1u << i;
+        put32(b + 8, (uint32_t)hiScore); put32(b + 12, bits); put32(b + 16, (uint32_t)courierKillsTotal); put32(b + 20, (uint32_t)flakShotTotal);
+        b[24] = (titleMuted ? 1 : 0) | (gameMusicMuted ? 2 : 0);
+        put32(b + 28, crc32(b, 28));
+        std::string tmp = std::string(SAVE_FILE) + ".tmp";                 // write a temp file, then swap it in
+        { std::ofstream f(tmp, std::ios::binary); if (!f) return; f.write((const char*)b, SAVE_SIZE); if (!f) return; }
+        std::remove(SAVE_FILE);
+        if (std::rename(tmp.c_str(), SAVE_FILE) != 0) std::remove(tmp.c_str());
+    }
+    bool readSave() {
+        std::ifstream f(SAVE_FILE, std::ios::binary); if (!f) return false;
+        unsigned char b[SAVE_SIZE];
+        if (!f.read((char*)b, SAVE_SIZE) || memcmp(b, "SSAV", 4) != 0 || b[4] != SAVE_VERSION || get32(b + 28) != crc32(b, 28)) return false;
+        hiScore = (int)get32(b + 8);
+        uint32_t bits = get32(b + 12); for (int i = 0; i < MD_COUNT; ++i) medal[i] = (bits >> i) & 1u;
+        courierKillsTotal = (int)get32(b + 16); flakShotTotal = (int)get32(b + 20);
+        titleMuted = (b[24] & 1) != 0; gameMusicMuted = (b[24] & 2) != 0;
+        return true;
+    }
+    // Read the old per-topic text files (pre-1.2 versions). Returns true if any existed.
+    bool readLegacyFiles() {
+        bool any = false; std::string line;
+        if (std::ifstream f{ LEGACY_HISCORE_FILE }) { f >> hiScore; any = true; }
+        if (std::ifstream f{ LEGACY_SETTINGS_FILE }) { any = true;
+            while (std::getline(f, line)) {
+                if (line.rfind("title_muted=", 0) == 0) titleMuted = line.size() > 12 && line[12] == '1';
+                if (line.rfind("game_music_muted=", 0) == 0) gameMusicMuted = line.size() > 17 && line[17] == '1';
+            } }
+        if (std::ifstream f{ LEGACY_MEDALS_FILE }) { any = true;
+            while (std::getline(f, line)) {
+                if (line.rfind("medals=", 0) == 0) for (int i = 0; i < MD_COUNT && 7 + i < (int)line.size(); ++i) medal[i] = line[7 + i] == '1';
+                else if (line.rfind("couriers=", 0) == 0) courierKillsTotal = atoi(line.c_str() + 9);
+                else if (line.rfind("flak=", 0) == 0) flakShotTotal = atoi(line.c_str() + 5);
+            } }
+        return any;
+    }
+    void loadHiScore() {   // loads the whole save; creates it (migrating any old text files) if it's missing or invalid
+        if (readSave()) return;
+        bool migrated = readLegacyFiles();
+        writeSave();
+        if (migrated && readSave())                                      // only remove the old files once the new one is safe
+            for (const char* fn : { LEGACY_HISCORE_FILE, LEGACY_SETTINGS_FILE, LEGACY_MEDALS_FILE }) std::remove(fn);
+    }
+    void saveSettings() { writeSave(); }
+    void saveHiScore() { if (debugRun) return; writeSave(); }
 };
 
 // On laptops with hybrid graphics, ask the NVIDIA (Optimus) and AMD (PowerXpress) drivers
