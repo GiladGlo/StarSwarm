@@ -12,6 +12,7 @@
 #include "sfxsynth.h"
 #include "titlemusic.h"
 #include "gamemusic.h"
+#include "rumble.h"
 #include <thread>
 #include <atomic>
 #include <functional>
@@ -35,6 +36,7 @@ static const float  PLAYER_Y_LOW    = 800 - 70.0f;   // lowest position (the ori
 static const float  PLAYER_Y_HIGH   = 800 - 490.0f;  // how far up the ship may fly (lower ~60% of the screen)
 static const size_t MAX_TORPEDOES = 5;          // projectiles allowed on screen at once
 static const char* HISCORE_FILE = "starswarm_highscore.txt";
+static const char* MEDALS_FILE   = "starswarm_medals.txt";     // medals=0101..., lifetime courier/flak counters
 static const char* SETTINGS_FILE = "starswarm_settings.txt";   // title_muted=0/1, game_music_muted=0/1
 
 // ----------------------------------------------------------------------------
@@ -602,6 +604,8 @@ struct Game {
         hyperT = -1; droneOn = false;
         packages.clear(); zaps.clear(); weapon = W_PHOTON; wlevel = 0; heat = 0; overheated = false; weaponBag.clear(); lastOffered = -1;
         mode = PLAYING; shield = false; boss.active = false;
+        shipsLostGame = 0; weaponsUsed = 1 << W_PHOTON; sectorPanel = false; slowT = flashT = 0; chainCount = 0;
+        medalToasts.clear(); toastT = 0; sectorMedals.clear(); medalsOpen = false;
         nextStage();
     }
 
@@ -633,7 +637,14 @@ struct Game {
     }
 
     void nextStage() {
+        if (stage >= 1 && stageKind(stage) == SK_WAVE && mode == PLAYING) {      // wave just cleared: accuracy medal
+            int sh = shotsFired - stageShots0, ht = hits - stageHits0;
+            if (sh >= 10 && ht * 100 >= sh * 80) unlockMedal(MD_SHARP);
+        }
         ++stage;
+        stageShots0 = shotsFired; stageHits0 = hits;
+        if ((stage - 1) % CYCLE == 0) { sectorT = 0; sectorShots0 = shotsFired; sectorHits0 = hits; shipsLostSector = 0; outpostsSector = 0; sectorMedals.clear(); }
+        if (stage == 5 * CYCLE + 1 && shipsLostGame == 0) unlockMedal(MD_NOCONT);
         if ((stage - 1) % CYCLE == 0) cycleT = 0;
         if (playerAlive) raiseShield();
         enemies.clear(); eBullets.clear(); warnings.clear();
@@ -742,6 +753,7 @@ struct Game {
     int cycleIndex() const { return std::clamp((stage - 1) / CYCLE, 0, BOSS_COUNT - 1); }
 
     void startMeteorField() {
+        fieldHit = false; outpostsField = 0;
         meteorField = true; fieldT = 0; spawnT = 0; outpostsSpawned = 0;
         gfx.ensureBoss(std::clamp((stage + 1) / CYCLE - 1, 0, BOSS_COUNT - 1));   // build the coming boss now
         fieldDur = 30.0f + 2.0f * cycleIndex();
@@ -854,6 +866,7 @@ struct Game {
     // Mining outpost blown off its rock: explosion, metal debris, 500 points and a package (Courier odds).
     // The rock itself then breaks up like any large asteroid.
     void destroyOutpost(Meteor& m) {
+        ++outpostsSector; if (++outpostsField >= 3) unlockMedal(MD_RAIDER);
         m.outpost = false;
         explode(m.pos, Color{ 255, 200, 120, 255 }, Color{ 240, 140, 40, 255 }, 40, 300);
         rings.push_back({ m.pos, 0.45f, 0.45f, 130, Color{ 255, 180, 90, 255 } });
@@ -887,16 +900,19 @@ struct Game {
         playSfx(SFX_BOOM); playSfx(SFX_IMPACT);
         popups.push_back({ { m.pos.x - 22, m.pos.y - 10 }, 1.0f, "BOOM!" });
 
+        chainT = 0.8f;                                   // rocks caught within one chain reaction count together
         std::vector<int> caught;
         for (const auto& o : meteors)
             if (Vector2Distance(o.pos, m.pos) < BLAST_RADIUS + o.r() * 0.5f) caught.push_back(o.id);
         for (int id : caught) {
             auto it = std::find_if(meteors.begin(), meteors.end(), [id](const Meteor& o) { return o.id == id; });
             if (it == meteors.end()) continue;
-            if (it->volatileRock()) { if (it->fuse <= 0) it->fuse = 0.15f; continue; }   // chain reaction
+            if (it->volatileRock()) { if (it->fuse <= 0) { it->fuse = 0.15f; ++chainCount; } continue; }   // chain reaction
+            ++chainCount;
             if (it->outpost) { hitMeteor((size_t)(it - meteors.begin()), Vector2Subtract(it->pos, m.pos)); continue; }   // armour soaks one hit
             breakMeteor((size_t)(it - meteors.begin()), Vector2Subtract(it->pos, m.pos));
         }
+        if (chainCount >= 5) unlockMedal(MD_CHAIN);
     }
 
     // Torpedo (or shield) hit: split into two smaller rocks, or crumble if already small
@@ -930,6 +946,7 @@ struct Game {
     }
 
     void updateMeteors(float dt) {
+        if (chainT > 0 && (chainT -= dt) <= 0) chainCount = 0;
         if (!meteorField && meteors.empty()) return;
         fieldT += dt;
         if (meteorField && fieldT < fieldDur && mode == PLAYING) {
@@ -962,6 +979,7 @@ struct Game {
             int bonus = 1000 * (cycleIndex() + 1);
             addScore(bonus);
             popups.push_back({ { W / 2.0f - 100, H / 2.0f }, 2.0f, TextFormat("FIELD CLEARED  +%d", bonus) });
+            if (!fieldHit) unlockMedal(MD_UNTOUCHABLE);
             playSfx(SFX_LIFE);
         }
     }
@@ -1052,6 +1070,7 @@ struct Game {
 
     // ============================================================= BOSSES ==
     void startBoss() {
+        bossFightT = 0;
         boss = Boss{};
         boss.active = true; boss.state = B_ENTER;
         boss.index = std::clamp(stage / CYCLE - 1, 0, BOSS_COUNT - 1);
@@ -1103,6 +1122,7 @@ struct Game {
         Boss& b = boss;
         if (!b.active) return;
         b.t += dt;
+        if (b.state == B_FIGHT) bossFightT += dt;
         if (b.state == B_FIGHT && b.phase() > 0 && (b.dmgT -= dt) <= 0) {
             int ph = b.phase();
             b.dmgT = ph == 1 ? frand(0.25f, 0.45f) : frand(0.08f, 0.18f);
@@ -1152,6 +1172,7 @@ struct Game {
                 popups.push_back({ { W / 2.0f - 130, b.pos.y }, 2.5f, TextFormat("%s DESTROYED  +%d", b.D().name, bonus) });
                 playSfx(SFX_BIGBOOM);
                 b.active = false;
+                bossDefeated(b);
                 if (b.index == BOSS_COUNT - 1) { mode = VICTORY; stageTimer = 0; fireworkT = 0.5f; saveHiScore(); }
             }
             return;
@@ -1562,6 +1583,7 @@ struct Game {
 
     void startHyper() {
         hyperT = 0; hyperSwitched = false; hyperStart = player;
+        unlockMedal(MD_SECTOR2);
         if (droneOn) {                                   // the drone does not make the jump: it warps away
             Vector2 d = Vector2Add(player, droneOff);
             parts.push_back({ d, { 0, 0 }, 0.35f, 0.35f, 30, Color{ 140, 255, 170, 255 }, FLASH });
@@ -1734,6 +1756,7 @@ struct Game {
 
     // Force field shatters: shards, flash, shockwave; brief grace period so one volley can't chain-kill
     void breakShield(Vector2 at) {
+        noteHitTaken(); rumbleFor(0.6f, 0.25f);
         shield = false; shieldGrace = 0.6f; shake = 0.25f; shieldRegen = SHIELD_REGEN_TIME;
         Color cy{ 90, 210, 255, 255 }, wh{ 210, 245, 255, 255 };
         parts.push_back({ at, { 0, 0 }, 0.2f, 0.2f, 26, wh, FLASH });
@@ -1754,6 +1777,7 @@ struct Game {
     }
 
     void killPlayer() {
+        noteHitTaken(); ++shipsLostSector; ++shipsLostGame; rumbleFor(1.0f, 0.5f);
         shield = false;
         if (droneOn) destroyDrone();
         // losing a life costs one upgrade level; with none left you drop back to the basic Photon Torpedo
@@ -1887,11 +1911,13 @@ struct Game {
         }
     }
     void updateEscMenu() {
-        if (gameMuteVisible() && (IsKeyPressed(KEY_M) || (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(mouseLogical(), GAME_MUTE_BTN)))) {
+        if (gameMuteVisible() && (IsKeyPressed(KEY_M) || padPressed(GAMEPAD_BUTTON_RIGHT_FACE_UP) || (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(mouseLogical(), GAME_MUTE_BTN)))) {
             toggleGameMusicMute(); return;   // music mute stays usable while the menu is open
         }
-        if (IsKeyPressed(KEY_UP) || IsKeyPressed(KEY_W) || IsKeyPressedRepeat(KEY_UP))     escSel = (escSel + ESC_N - 1) % ESC_N;
-        if (IsKeyPressed(KEY_DOWN) || IsKeyPressed(KEY_S) || IsKeyPressedRepeat(KEY_DOWN)) escSel = (escSel + 1) % ESC_N;
+        if (padPressed(GAMEPAD_BUTTON_RIGHT_FACE_RIGHT)) { escMenu = false; return; }   // B = resume
+        if (padPressed(GAMEPAD_BUTTON_RIGHT_FACE_DOWN)) { escChoose(escSel); return; }   // A = confirm
+        if (IsKeyPressed(KEY_UP) || IsKeyPressed(KEY_W) || IsKeyPressedRepeat(KEY_UP) || padPressed(GAMEPAD_BUTTON_LEFT_FACE_UP))       escSel = (escSel + ESC_N - 1) % ESC_N;
+        if (IsKeyPressed(KEY_DOWN) || IsKeyPressed(KEY_S) || IsKeyPressedRepeat(KEY_DOWN) || padPressed(GAMEPAD_BUTTON_LEFT_FACE_DOWN)) escSel = (escSel + 1) % ESC_N;
         for (int i = 0; i < ESC_N; ++i) if (IsKeyPressed((KeyboardKey)(KEY_ONE + i)) || IsKeyPressed((KeyboardKey)(KEY_KP_1 + i))) { escChoose(i); return; }
         if (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_KP_ENTER) || IsKeyPressed(KEY_SPACE)) { escChoose(escSel); return; }
         Vector2 m = mouseLogical();
@@ -1930,6 +1956,7 @@ struct Game {
     void update(float dt) {
         time += dt;
         if (escMenu) { updateEscMenu(); return; }
+        if (!medalToasts.empty() && (toastT += dt) > 3.2f) { medalToasts.erase(medalToasts.begin()); toastT = 0; }
         for (auto& s : stars) { s.pos.y += s.speed * dt * (mode == PLAYING ? 1.0f : 0.5f);
                                 if (s.pos.y > H) { s.pos.y = 0; s.pos.x = frand(0, W); } }
         updateParticles(dt);
@@ -1939,9 +1966,11 @@ struct Game {
             bool ctrl = IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL);
             if (stageDialog) { updateStageDialog(); return; }
             titleT += dt;
-            if (IsKeyPressed(KEY_M) || (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(mouseLogical(), MUTE_BTN))) toggleTitleMute();
+            if (medalsOpen) { updateMedalsScreen(); return; }
+            if (IsKeyPressed(KEY_M) || padPressed(GAMEPAD_BUTTON_RIGHT_FACE_UP) || (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(mouseLogical(), MUTE_BTN))) toggleTitleMute();
+            if (IsKeyPressed(KEY_TAB) || padPressed(GAMEPAD_BUTTON_RIGHT_FACE_LEFT) || (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(mouseLogical(), MEDAL_BTN))) { medalsOpen = true; medalSel = 0; return; }
             if (ctrl && IsKeyPressed(KEY_L)) { stageDialog = true; dlgText = "1"; while (GetCharPressed()) {} return; }
-            if (IsKeyPressed(KEY_SPACE) || (IsKeyPressed(KEY_ENTER) && !alt)) { debugRun = false; newGame(); }
+            if (IsKeyPressed(KEY_SPACE) || padConfirm() || (IsKeyPressed(KEY_ENTER) && !alt)) { debugRun = false; newGame(); }
             return;
         }
         if (mode == VICTORY) {
@@ -1955,21 +1984,27 @@ struct Game {
                 explode(p, cs[GetRandomValue(0, 5)], WHITE, 40, 260);
                 playSfx(SFX_BOOM);
             }
-            if (stageTimer > 3.0f && (IsKeyPressed(KEY_SPACE) || IsKeyPressed(KEY_ENTER))) returnToTitle();
+            if (stageTimer > 3.0f && (IsKeyPressed(KEY_SPACE) || IsKeyPressed(KEY_ENTER) || padConfirm())) returnToTitle();
             return;
         }
         if (mode == GAMEOVER) {
             updateEnemies(dt);
             updateBoss(dt);
             updateMeteors(dt);
-            if (stageTimer > 2.0f && (IsKeyPressed(KEY_SPACE) || IsKeyPressed(KEY_ENTER))) returnToTitle();
+            if (stageTimer > 2.0f && (IsKeyPressed(KEY_SPACE) || IsKeyPressed(KEY_ENTER) || padConfirm())) returnToTitle();
             stageTimer += dt;
             return;
         }
 
-        if (IsKeyPressed(KEY_M) || (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(mouseLogical(), GAME_MUTE_BTN))) toggleGameMusicMute();
-        if (IsKeyPressed(KEY_P)) paused = !paused;
+        if (IsKeyPressed(KEY_M) || padPressed(GAMEPAD_BUTTON_RIGHT_FACE_UP) || (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(mouseLogical(), GAME_MUTE_BTN))) toggleGameMusicMute();
+        if (IsKeyPressed(KEY_P) || padPressed(GAMEPAD_BUTTON_MIDDLE_RIGHT)) paused = !paused;
         if (paused) return;
+        if (sectorPanel) {                                // SECTOR CLEARED: 6 s, or Space / A after a short beat
+            sectorPanelT += dt;
+            if (sectorPanelT >= PANEL_TIME || (sectorPanelT > 0.6f && (IsKeyPressed(KEY_SPACE) || padPressed(GAMEPAD_BUTTON_RIGHT_FACE_DOWN)))) { sectorPanel = false; startHyper(); }
+            return;
+        }
+        sectorT += dt;
 
         stageTimer += dt; cycleT += dt;
         bannerTimer -= dt;
@@ -1992,7 +2027,7 @@ struct Game {
             clearT += dt;
             if (clearT > 1.6f) {
                 clearT = 0;
-                if (stageKind(stage) == SK_BOSS && playerAlive && hyperT < 0) startHyper(); else nextStage();
+                if (stageKind(stage) == SK_BOSS && playerAlive && hyperT < 0) openSectorPanel(); else nextStage();
             }
         } else clearT = 0;
     }
@@ -2019,6 +2054,16 @@ struct Game {
         if (IsKeyDown(KEY_RIGHT) || IsKeyDown(KEY_D)) mv += 1;
         if (IsKeyDown(KEY_UP)    || IsKeyDown(KEY_W)) mvy -= 1;
         if (IsKeyDown(KEY_DOWN)  || IsKeyDown(KEY_S)) mvy += 1;
+        if (padOn()) {                                   // controller: left stick (analog) or D-pad
+            float ax = GetGamepadAxisMovement(0, GAMEPAD_AXIS_LEFT_X), ay = GetGamepadAxisMovement(0, GAMEPAD_AXIS_LEFT_Y);
+            if (fabsf(ax) > 0.2f) mv += ax;
+            if (fabsf(ay) > 0.2f) mvy += ay;
+            if (padDown(GAMEPAD_BUTTON_LEFT_FACE_LEFT)) mv -= 1;
+            if (padDown(GAMEPAD_BUTTON_LEFT_FACE_RIGHT)) mv += 1;
+            if (padDown(GAMEPAD_BUTTON_LEFT_FACE_UP)) mvy -= 1;
+            if (padDown(GAMEPAD_BUTTON_LEFT_FACE_DOWN)) mvy += 1;
+            mv = Clamp(mv, -1, 1); mvy = Clamp(mvy, -1, 1);
+        }
         player.x = Clamp(player.x + mv * 340 * dt, PLAYER_MARGIN_X, W - PLAYER_MARGIN_X);
         player.y = Clamp(player.y + mvy * 300 * dt, PLAYER_Y_HIGH, PLAYER_Y_LOW);
 
@@ -2029,7 +2074,9 @@ struct Game {
             if (IsKeyPressed(KEY_MINUS) || IsKeyPressed(KEY_KP_SUBTRACT)) wlevel = std::max(0, wlevel - 1);
         }
         fireCooldown -= dt;
-        bool trigger = IsKeyDown(KEY_SPACE) || autoFire;   // hold to keep firing
+        bool trigger = IsKeyDown(KEY_SPACE) || autoFire   // hold to keep firing (A or RT on a controller)
+                    || padDown(GAMEPAD_BUTTON_RIGHT_FACE_DOWN) || padDown(GAMEPAD_BUTTON_RIGHT_TRIGGER_2)
+                    || (padOn() && GetGamepadAxisMovement(0, GAMEPAD_AXIS_RIGHT_TRIGGER) > 0.3f);
         laserOn = false;
         if (weapon == W_PULSE) {
             static const float rate[4] = { 0.4f, 0.34f, 0.29f, 0.24f };   // heat per second of firing (~2.5 s at Lv0)
@@ -2283,6 +2330,7 @@ struct Game {
     // Fire one volley of the current (non-laser) weapon; each class has its own on-screen limit
     // ======================================================== WINGMAN DRONE ==
     void activateDrone() {
+        unlockMedal(MD_WINGMAN);
         droneT = DRONE_TIME;
         if (droneOn) return;                             // already flying: just refresh the timer
         droneOn = true; droneWarp = 0.6f; droneFireT = 0.8f; droneBank = 0;
@@ -2438,6 +2486,7 @@ struct Game {
             default: return;
         }
         fireCooldown = wCooldown(); ++shotsFired;
+        if (weapon == W_ION) rumbleFor(0.25f, 0.1f);
         Color c = WCOL[weapon];
         parts.push_back({ m, { 0, 0 }, 0.12f, 0.12f, 22, c, FLASH });
         playSfx(weapon == W_SPREAD ? SFX_FIRE_SPREAD : weapon == W_HOMING ? SFX_FIRE_HOMING : weapon == W_ION ? SFX_FIRE_ION : SFX_SHOOT);
@@ -2476,6 +2525,7 @@ struct Game {
         if ((diving && pts >= 160) || e.type == COURIER) popups.push_back({ e.pos, 1.0f, std::to_string(pts) });
         e.state = DEAD;
         if (e.type == COURIER) {
+            if (!debugRun) { ++courierKillsTotal; saveMedals(); if (courierKillsTotal >= 25) unlockMedal(MD_COURIER); }
             courierBurst(e.pos);
             packages.push_back({ { e.pos.x, e.pos.y + 6 }, e.cargo, 0 });
         } else {
@@ -2608,10 +2658,11 @@ struct Game {
         Color c = pk.content >= 0 ? WCOL[pk.content] : UPG_COL;
         std::string label;
         if (pk.content < 0 || pk.content == weapon) {
-            if (wlevel < 3) { ++wlevel; label = TextFormat("UPGRADE +1   LV%d", wlevel); }
+            if (wlevel < 3) { ++wlevel; label = TextFormat("UPGRADE +1   LV%d", wlevel); if (wlevel == 3) unlockMedal(MD_MAXPOWER); }
             else { addScore(1000); label = droneOn ? "MAX LEVEL +1000  DRONE 30s" : "MAX LEVEL +1000  WINGMAN DRONE"; activateDrone(); }
         } else {
             weapon = pk.content; heat = 0; overheated = false;   // keeps the current upgrade level
+            noteWeapon(); if (wlevel == 3) unlockMedal(MD_MAXPOWER);
             label = WNAME[weapon];
         }
         popups.push_back({ { player.x - 70, player.y - 80 }, 1.8f, label });
@@ -2714,6 +2765,7 @@ struct Game {
     void destroyProjectile(size_t i) {
         Bullet b = eBullets[i];
         eBullets.erase(eBullets.begin() + i);
+        if (b.kind == BK_FLAK && !debugRun) { ++flakShotTotal; saveMedals(); if (flakShotTotal >= 20) unlockMedal(MD_FLAK); }
         if (b.kind == BK_METEOR) {
             explode(b.pos, Color{ 255, 150, 60, 255 }, Color{ 150, 130, 115, 255 }, 12, 180);
             for (int q = 0; q < 6; ++q) { float ang = frand(0, 2 * PI), sp = frand(60, 160), life = frand(0.4f, 0.8f);
@@ -3273,6 +3325,7 @@ struct Game {
         if (escMenu) { drawEscMenuText(); EndScissorMode(); EndDrawing(); return; }
         for (auto& p : popups) text(p.text.c_str(), p.pos.x - 16, p.pos.y, 18, SKYBLUE);
         drawHudText();
+        drawOverlays();
         EndScissorMode();
         EndDrawing();
     }
@@ -3307,6 +3360,238 @@ struct Game {
         DrawRing(player, r - 6.5f, r - 3.5f, 200, 255, 24, Color{ 230, 250, 255, A(0.55f) });   // crescent glint
         if (g < 1) DrawRing(player, r, r + 10 * (1 - g), 0, 360, 64, Color{ 200, 245, 255, A(1 - g) });  // power-up flash
         EndBlendMode();
+    }
+
+    // ======================================================= MEDALS / SECTOR STATS / GAMEPAD ==
+    enum MedalId { MD_UNTOUCHABLE, MD_FLAWLESS, MD_PURIST, MD_RAIDER, MD_CHAIN, MD_SHARP, MD_COURIER, MD_MAXPOWER,
+                   MD_ARSENAL, MD_WINGMAN, MD_FLAK, MD_BLITZ, MD_SECTOR2, MD_HALFWAY, MD_NOCONT, MD_SAVIOR, MD_COUNT };
+    struct MedalDef { const char* name; const char* desc; Color col; int glyph; };
+    static const MedalDef* medalDefs() {
+        static const MedalDef M[MD_COUNT] = {
+            { "UNTOUCHABLE",     "Clear a meteor field without taking a hit",      { 120, 200, 255, 255 }, 0 },
+            { "FLAWLESS SECTOR", "Clear a whole sector without losing a ship",     { 255, 215, 60, 255 }, 1 },
+            { "PURIST",          "Defeat a boss with the Photon Torpedo at Lv0",   { 255, 110, 50, 255 }, 2 },
+            { "OUTPOST RAIDER",  "Destroy all 3 mining outposts in one field",     { 255, 160, 40, 255 }, 3 },
+            { "CHAIN REACTION",  "Destroy 5 rocks with one volatile blast",        { 255, 80, 60, 255 }, 4 },
+            { "SHARPSHOOTER",    "Finish a wave with 80% accuracy or better",      { 110, 255, 120, 255 }, 5 },
+            { "COURIER HUNTER",  "Destroy 25 Couriers",                            { 255, 215, 60, 255 }, 6 },
+            { "MAX POWER",       "Reach Lv3 with any weapon",                      { 190, 110, 255, 255 }, 7 },
+            { "ARSENAL",         "Use all five weapons in one game",               { 70, 220, 255, 255 }, 8 },
+            { "WINGMAN",         "Call in the wingman drone",                      { 110, 255, 120, 255 }, 9 },
+            { "FLAK DANCER",     "Shoot down 20 outpost flak shells",              { 255, 90, 50, 255 }, 10 },
+            { "BLITZ",           "Destroy a boss in under 30 seconds",             { 255, 120, 200, 255 }, 11 },
+            { "SECTOR 2",        "Make your first hyperspace jump",                { 120, 150, 255, 255 }, 12 },
+            { "HALFWAY THERE",   "Defeat the 5th capital ship",                    { 170, 150, 255, 255 }, 13 },
+            { "NO CONTINUES",    "Reach sector 6 without losing a ship",           { 80, 230, 200, 255 }, 14 },
+            { "SAVIOR",          "Defeat all ten capital ships",                   { 255, 230, 140, 255 }, 15 } };
+        return M;
+    }
+    bool medal[MD_COUNT]{};
+    int  courierKillsTotal = 0, flakShotTotal = 0;      // lifetime counters (saved with the medals)
+    std::vector<int> medalToasts;                       // unlocked medals waiting to be announced
+    float toastT = 0;
+    std::vector<int> sectorMedals;                      // medals unlocked during the current sector
+    bool medalsOpen = false; int medalSel = 0;          // title-screen medals screen
+    static constexpr Rectangle MEDAL_BTN{ 60, 754, 34, 34 };
+    static constexpr Rectangle MEDAL_PANEL{ 30, 90, 540, 620 };
+
+    void loadMedals() {
+        std::ifstream f(MEDALS_FILE); std::string line;
+        while (f && std::getline(f, line)) {
+            if (line.rfind("medals=", 0) == 0) for (int i = 0; i < MD_COUNT && 7 + i < (int)line.size(); ++i) medal[i] = line[7 + i] == '1';
+            else if (line.rfind("couriers=", 0) == 0) courierKillsTotal = atoi(line.c_str() + 9);
+            else if (line.rfind("flak=", 0) == 0) flakShotTotal = atoi(line.c_str() + 5);
+        }
+    }
+    void saveMedals() {
+        std::ofstream f(MEDALS_FILE); if (!f) return;
+        f << "medals="; for (int i = 0; i < MD_COUNT; ++i) f << (medal[i] ? '1' : '0');
+        f << "\ncouriers=" << courierKillsTotal << "\nflak=" << flakShotTotal << "\n";
+    }
+    int medalCount() const { int n = 0; for (bool m : medal) n += m; return n; }
+    void unlockMedal(int id) {
+        if (debugRun || medal[id]) return;              // debug runs never earn medals
+        medal[id] = true; saveMedals();
+        medalToasts.push_back(id); sectorMedals.push_back(id);
+        playSfx(SFX_LIFE);
+    }
+
+    // ---- per-sector / per-stage tracking for medals and the SECTOR CLEARED panel ----
+    float sectorT = 0, bossFightT = 0;
+    int   sectorShots0 = 0, sectorHits0 = 0, stageShots0 = 0, stageHits0 = 0;
+    int   shipsLostSector = 0, shipsLostGame = 0, outpostsSector = 0, outpostsField = 0, weaponsUsed = 1;
+    int   chainCount = 0; float chainT = 0;             // rocks caught by one volatile chain reaction
+    bool  fieldHit = false;                             // took a hit during this meteor field
+    void noteHitTaken() { if (stageKind(stage) == SK_METEORS) fieldHit = true; }
+    void noteWeapon() { weaponsUsed |= 1 << weapon; if (weaponsUsed == (1 << W_COUNT) - 1) unlockMedal(MD_ARSENAL); }
+
+    // ---- boss kill: slow motion + flash, then the SECTOR CLEARED panel before the jump ----
+    float slowT = 0, flashT = 0;
+    static constexpr float SLOW_TIME = 1.6f, FLASH_TIME = 0.35f, PANEL_TIME = 6.0f;
+    float timeScale() const { if (slowT <= 0) return 1.0f; float u = 1 - slowT / SLOW_TIME; return 0.2f + 0.8f * u * u; }
+    bool  sectorPanel = false; float sectorPanelT = 0;
+    int   panelSector = 1, panelAcc = 0, panelShips = 0, panelOutposts = 0, panelBonus = 0; float panelTime = 0, panelBossT = 0;
+    std::string panelBoss;
+    void bossDefeated(const Boss& b) {
+        slowT = SLOW_TIME; flashT = FLASH_TIME; rumbleFor(1.0f, 0.9f);
+        if (weapon == W_PHOTON && wlevel == 0) unlockMedal(MD_PURIST);
+        if (bossFightT < 30) unlockMedal(MD_BLITZ);
+        if (shipsLostSector == 0) unlockMedal(MD_FLAWLESS);
+        if (b.index == 4) unlockMedal(MD_HALFWAY);
+        if (b.index == BOSS_COUNT - 1) unlockMedal(MD_SAVIOR);
+        panelBoss = b.D().name; panelBossT = bossFightT;
+    }
+    void openSectorPanel() {
+        int shots = shotsFired - sectorShots0, hit = hits - sectorHits0;
+        panelSector = (stage - 1) / CYCLE + 1;
+        panelAcc = shots > 0 ? std::min(100, (int)lroundf(100.0f * hit / shots)) : 0;
+        panelShips = shipsLostSector; panelOutposts = outpostsSector; panelTime = sectorT;
+        panelBonus = 1000 * panelSector + (panelShips == 0 ? 2000 : 0) + (panelAcc >= 70 ? 1000 : 0) + 500 * panelOutposts;
+        addScore(panelBonus);
+        sectorPanel = true; sectorPanelT = 0;
+        playSfx(SFX_STAGE);
+    }
+
+    // ---- gamepad (first controller) ----
+    float rumbleT = 0;
+    bool padOn() const { return IsGamepadAvailable(0); }
+    bool padPressed(int b) const { return padOn() && IsGamepadButtonPressed(0, b); }
+    bool padDown(int b) const { return padOn() && IsGamepadButtonDown(0, b); }
+    bool padConfirm() const { return padPressed(GAMEPAD_BUTTON_RIGHT_FACE_DOWN) || padPressed(GAMEPAD_BUTTON_MIDDLE_RIGHT); }
+    void rumbleFor(float strength, float secs) {
+        if (!padOn()) return;
+        rumble::set(0, strength, strength * 0.7f);
+        rumbleT = std::max(rumbleT, secs);
+    }
+    // real-time bookkeeping (not slowed by the boss-kill slow motion)
+    void tickRealTime(float dt) {
+        slowT = std::max(0.0f, slowT - dt); flashT = std::max(0.0f, flashT - dt);
+        if (rumbleT > 0 && (rumbleT -= dt) <= 0) rumble::set(0, 0, 0);
+    }
+
+    // ---- title-screen medals screen ----
+    Vector2 medalCell(int i) const { return { MEDAL_PANEL.x + 70 + (i % 4) * 133.0f, MEDAL_PANEL.y + 118 + (i / 4) * 120.0f }; }
+    void updateMedalsScreen() {
+        if (IsKeyPressed(KEY_TAB) || padPressed(GAMEPAD_BUTTON_RIGHT_FACE_RIGHT) || padPressed(GAMEPAD_BUTTON_RIGHT_FACE_LEFT)) { medalsOpen = false; return; }
+        int cx = medalSel % 4, cy = medalSel / 4;
+        if (IsKeyPressed(KEY_LEFT) || IsKeyPressed(KEY_A) || padPressed(GAMEPAD_BUTTON_LEFT_FACE_LEFT))   cx = (cx + 3) % 4;
+        if (IsKeyPressed(KEY_RIGHT) || IsKeyPressed(KEY_D) || padPressed(GAMEPAD_BUTTON_LEFT_FACE_RIGHT)) cx = (cx + 1) % 4;
+        if (IsKeyPressed(KEY_UP) || IsKeyPressed(KEY_W) || padPressed(GAMEPAD_BUTTON_LEFT_FACE_UP))       cy = (cy + 3) % 4;
+        if (IsKeyPressed(KEY_DOWN) || IsKeyPressed(KEY_S) || padPressed(GAMEPAD_BUTTON_LEFT_FACE_DOWN))   cy = (cy + 1) % 4;
+        medalSel = cy * 4 + cx;
+        Vector2 m = mouseLogical(), md = GetMouseDelta();
+        for (int i = 0; i < MD_COUNT; ++i) { Vector2 c = medalCell(i);
+            if ((md.x != 0 || md.y != 0) && CheckCollisionPointRec(m, { c.x - 60, c.y - 52, 120, 106 })) medalSel = i; }
+        if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && !CheckCollisionPointRec(m, MEDAL_PANEL)) medalsOpen = false;   // click outside closes
+    }
+
+    // ---- drawing ----
+    void drawMedalGlyph(int g, Vector2 c, float s, Color col) {
+        switch (g % 8) {
+            case 0: DrawPoly(c, 5, s * 0.5f, -90, col); DrawPoly(c, 5, s * 0.5f, -54, col); break;                    // star
+            case 1: DrawTriangle({ c.x - s * 0.45f, c.y - s * 0.35f }, { c.x, c.y + s * 0.55f }, { c.x + s * 0.45f, c.y - s * 0.35f }, col);
+                    DrawRectangleV({ c.x - s * 0.45f, c.y - s * 0.5f }, { s * 0.9f, s * 0.2f }, col); break;        // shield
+            case 2: DrawRing(c, s * 0.3f, s * 0.42f, 0, 360, 24, col);                                                  // crosshair
+                    DrawLineEx({ c.x - s * 0.6f, c.y }, { c.x + s * 0.6f, c.y }, s * 0.1f, col); DrawLineEx({ c.x, c.y - s * 0.6f }, { c.x, c.y + s * 0.6f }, s * 0.1f, col); break;
+            case 3: DrawPoly(c, 7, s * 0.45f, 12, col); break;                                                        // rock
+            case 4: weaponIcon(4, c, s * 1.2f, col); break;                                                           // lightning
+            case 5: weaponIcon(5, c, s * 1.2f, col); break;                                                           // chevrons
+            case 6: DrawPoly(c, 4, s * 0.5f, 45, col); DrawPoly(c, 4, s * 0.25f, 45, Color{ 30, 30, 40, 255 }); break; // diamond
+            default: { Vector2 p[5] = { { c.x - s * 0.5f, c.y + s * 0.3f }, { c.x - s * 0.5f, c.y - s * 0.3f }, { c.x - s * 0.15f, c.y },
+                                        { c.x + s * 0.15f, c.y - s * 0.45f }, { c.x + s * 0.5f, c.y - s * 0.3f } };     // crown
+                       DrawRectangleV({ c.x - s * 0.5f, c.y }, { s, s * 0.3f }, col); for (int i = 0; i < 4; ++i) DrawLineEx(p[i], p[i + 1], s * 0.14f, col); break; }
+        }
+    }
+    // Gold medal on a two-tone ribbon (locked: grey coin; the "?" is drawn with the text)
+    void drawMedal(int id, Vector2 c, float r, bool unlocked, float glowA = 0) {
+        const MedalDef& m = medalDefs()[id];
+        Color rib1 = unlocked ? m.col : Color{ 60, 62, 75, 255 };
+        Color rib2 = unlocked ? Color{ (unsigned char)(m.col.r / 2), (unsigned char)(m.col.g / 2), (unsigned char)(m.col.b / 2), 255 } : Color{ 45, 46, 56, 255 };
+        DrawTriangle({ c.x - r * 0.7f, c.y - r * 1.6f }, { c.x - r * 0.15f, c.y - r * 0.6f }, { c.x - r * 0.05f, c.y - r * 1.6f }, rib1);
+        DrawTriangle({ c.x + r * 0.05f, c.y - r * 1.6f }, { c.x + r * 0.15f, c.y - r * 0.6f }, { c.x + r * 0.7f, c.y - r * 1.6f }, rib2);
+        if (unlocked && glowA > 0) { BeginBlendMode(BLEND_ADDITIVE); drawGlow(c, r * 2.2f, Color{ 255, 220, 120, (unsigned char)(120 * glowA) }); EndBlendMode(); }
+        DrawCircleV(c, r, unlocked ? Color{ 150, 110, 30, 255 } : Color{ 50, 52, 62, 255 });
+        DrawCircleV(c, r * 0.86f, unlocked ? Color{ 255, 205, 70, 255 } : Color{ 70, 72, 84, 255 });
+        DrawCircleV(c, r * 0.68f, unlocked ? Color{ 40, 32, 18, 255 } : Color{ 38, 39, 48, 255 });
+        if (unlocked) { drawMedalGlyph(m.glyph, c, r * 0.95f, m.col); DrawCircleV({ c.x - r * 0.45f, c.y - r * 0.5f }, r * 0.12f, Color{ 255, 250, 220, 200 }); }
+    }
+    void drawMedalButton() {
+        bool hover = CheckCollisionPointRec(mouseLogical(), MEDAL_BTN);
+        DrawRectangleRounded(MEDAL_BTN, 0.3f, 8, hover ? Color{ 40, 44, 70, 230 } : Color{ 20, 22, 40, 200 });
+        DrawRectangleRoundedLinesEx(MEDAL_BTN, 0.3f, 8, 1.5f, Color{ 255, 215, 60, (unsigned char)(hover ? 255 : 170) });
+        drawMedal(MD_FLAWLESS, { MEDAL_BTN.x + 17, MEDAL_BTN.y + 21 }, 8, true);
+    }
+    float toastY() const { float in = std::min(1.0f, toastT / 0.35f), out = std::min(1.0f, std::max(0.0f, (3.2f - toastT) / 0.35f));
+                           float u = std::min(in, out); return 96 - 110 * (1 - u) * (1 - u); }
+    // Overlays drawn last, on top of everything: boss-kill flash, medal toast, SECTOR CLEARED panel, medals screen
+    void drawOverlays() {
+        if (flashT > 0) DrawRectangle(0, 0, GetScreenWidth(), GetScreenHeight(), Color{ 255, 255, 255, (unsigned char)(220 * flashT / FLASH_TIME) });
+        Camera2D cam{ origin, { 0, 0 }, 0, scale };
+        bool toast = !medalToasts.empty() && mode == PLAYING;
+        float ty = toastY();
+        float pa = std::min(1.0f, sectorPanelT / 0.4f); unsigned char PA = (unsigned char)(255 * pa);
+        BeginMode2D(cam);
+        if (toast) {
+            Rectangle r{ W / 2.0f - 165, ty, 330, 56 };
+            DrawRectangleRounded(r, 0.35f, 8, Color{ 30, 24, 8, 235 }); DrawRectangleRoundedLinesEx(r, 0.35f, 8, 1.8f, Color{ 255, 215, 60, 255 });
+            drawMedal(medalToasts.front(), { r.x + 34, r.y + 34 }, 15, true, 0.8f + 0.2f * sinf(time * 6));
+        }
+        if (sectorPanel) {
+            DrawRectangle(0, 0, W, H, Color{ 0, 0, 10, (unsigned char)(120 * pa) });
+            Rectangle r{ W / 2.0f - 210, 190, 420, 352 };
+            DrawRectangleRounded(r, 0.08f, 8, Color{ 14, 14, 32, (unsigned char)(235 * pa) });
+            DrawRectangleRoundedLinesEx(r, 0.08f, 8, 2, Color{ 255, 140, 200, PA });
+            int n = std::min(6, (int)sectorMedals.size());
+            for (int i = 0; i < n; ++i) drawMedal(sectorMedals[i], { W / 2.0f - (n - 1) * 25.0f + i * 50.0f, r.y + 292 }, 14, true, 0.6f);
+        }
+        if (medalsOpen) {
+            DrawRectangle(0, 0, W, H, Color{ 0, 0, 8, 215 });
+            DrawRectangleRounded(MEDAL_PANEL, 0.05f, 8, Color{ 14, 14, 32, 245 });
+            DrawRectangleRoundedLinesEx(MEDAL_PANEL, 0.05f, 8, 2, Color{ 255, 215, 60, 255 });
+            for (int i = 0; i < MD_COUNT; ++i) { Vector2 c = medalCell(i);
+                if (i == medalSel) DrawRectangleRounded({ c.x - 60, c.y - 52, 120, 106 }, 0.15f, 6, Color{ 255, 215, 60, 40 });
+                drawMedal(i, c, 22, medal[i], i == medalSel ? 0.7f : 0); }
+        }
+        EndMode2D();
+        if (toast) {
+            text("MEDAL UNLOCKED", W / 2.0f - 112, ty + 9, 12, Color{ 255, 215, 60, 255 });
+            text(medalDefs()[medalToasts.front()].name, W / 2.0f - 112, ty + 25, 20, RAYWHITE);
+        }
+        if (sectorPanel) {
+            drawCentered(TextFormat("SECTOR %d CLEARED", panelSector), 206, 30, Color{ 255, 140, 200, PA });
+            drawCentered(TextFormat("%s DESTROYED", panelBoss.c_str()), 244, 14, Color{ 200, 200, 220, PA });
+            auto mmss = [](float s) { int t = (int)s; return TextFormat("%d:%02d", t / 60, t % 60); };
+            const char* L[5] = { "Sector time", "Accuracy", "Ships lost", "Outposts destroyed", "Boss time" };
+            std::string V[5] = { mmss(panelTime), TextFormat("%d%%", panelAcc), TextFormat("%d", panelShips), TextFormat("%d / 3", panelOutposts), mmss(panelBossT) };
+            for (int i = 0; i < 5; ++i) { text(L[i], W / 2.0f - 170, 278 + i * 26.0f, 16, Color{ 170, 175, 200, PA });
+                                          text(V[i].c_str(), W / 2.0f + 110, 278 + i * 26.0f, 16, Color{ 255, 255, 255, PA }); }
+            text("SECTOR BONUS", W / 2.0f - 170, 412, 18, Color{ 255, 215, 60, PA });
+            text(TextFormat("+%d", panelBonus), W / 2.0f + 90, 412, 18, Color{ 255, 215, 60, PA });
+            drawCentered(sectorMedals.empty() ? "NO NEW MEDALS" : "MEDALS EARNED", 440, 11, Color{ 170, 175, 200, PA });
+            drawCentered(TextFormat("SPACE%s  -  JUMP TO HYPERSPACE  (%d)", padOn() ? " / A" : "", std::max(1, (int)ceilf(PANEL_TIME - sectorPanelT))), 516, 12, Color{ 200, 200, 220, PA });
+        }
+        if (medalsOpen) {
+            drawCentered(TextFormat("MEDALS   %d / %d", medalCount(), (int)MD_COUNT), 108, 26, Color{ 255, 215, 60, 255 });
+            for (int i = 0; i < MD_COUNT; ++i) { Vector2 c = medalCell(i);
+                if (!medal[i]) text("?", c.x - 5, c.y - 11, 21, Color{ 120, 122, 140, 255 });
+                const char* nm = medalDefs()[i].name; float w = MeasureTextEx(font, nm, 11 * scale, 11 * scale * 0.04f).x / scale;
+                text(nm, c.x - w / 2, c.y + 30, 11, medal[i] ? RAYWHITE : Color{ 110, 112, 130, 255 }); }
+            const MedalDef& d = medalDefs()[medalSel];
+            drawCentered(TextFormat("%s  -  %s", d.name, d.desc), 676, 12, medal[medalSel] ? Color{ 255, 230, 160, 255 } : Color{ 170, 172, 190, 255 });
+            drawCentered(padOn() ? "TAB / ESC / B  close" : "TAB / ESC  close", 694, 10, Color{ 120, 122, 140, 255 });
+        }
+    }
+    // "PRESS SPACE TO START", with an A button when a controller is connected
+    void drawStartPrompt() {
+        if (!padOn()) { drawCentered("PRESS SPACE TO START", 584, 26, RAYWHITE); return; }
+        float fs = 26 * scale, sp = customFont ? fs * 0.04f : fs / 10;
+        float w1 = MeasureTextEx(font, "PRESS SPACE OR ", fs, sp).x / scale, w2 = MeasureTextEx(font, " TO START", fs, sp).x / scale, bw = 30;
+        float x0 = W / 2.0f - (w1 + bw + w2) / 2;
+        text("PRESS SPACE OR ", x0, 584, 26, RAYWHITE); text(" TO START", x0 + w1 + bw, 584, 26, RAYWHITE);
+        BeginMode2D(Camera2D{ origin, { 0, 0 }, 0, scale });
+        DrawCircleV({ x0 + w1 + bw / 2, 597 }, 14, Color{ 60, 170, 80, 255 }); DrawCircleLinesV({ x0 + w1 + bw / 2, 597 }, 14, Color{ 160, 240, 170, 255 });
+        EndMode2D();
+        text("A", x0 + w1 + bw / 2 - 7, 586, 20, RAYWHITE);
     }
 
     // ---- Title-screen enemy roster: 4x2 grid (7 monsters + rotating BOSS) and a featured Courier row ----
@@ -3433,6 +3718,7 @@ struct Game {
             (void)f;
             drawRosterShapes();
             drawMuteButtonShapes();
+            drawMedalButton();
             return;
         }
         if (mode == PLAYING || mode == VICTORY || mode == GAMEOVER) drawStatusPanel();
@@ -3515,7 +3801,7 @@ struct Game {
         if (mode == TITLE) {
             drawTitleText();
             drawRosterText();
-            if (fmodf(time, 1.0f) < 0.6f) drawCentered("PRESS SPACE TO START", 584, 26, RAYWHITE);
+            if (fmodf(time, 1.0f) < 0.6f) drawStartPrompt();
             drawCentered("ARROWS / WASD  move    SPACE  fire    P / ESC  pause", 640, 16, GRAY);
             drawCentered("F11 / ALT+ENTER  fullscreen", 664, 16, GRAY);
             drawCentered(TextFormat("HIGH SCORE  %d", hiScore), 710, 22, GOLD);
@@ -3592,7 +3878,7 @@ struct Game {
     }
 
     // --- persistence ----------------------------------------------------------
-    void loadHiScore() { std::ifstream f(HISCORE_FILE); if (f) f >> hiScore; loadSettings(); }
+    void loadHiScore() { std::ifstream f(HISCORE_FILE); if (f) f >> hiScore; loadSettings(); loadMedals(); }
     void loadSettings() { std::ifstream f(SETTINGS_FILE); std::string line;
         while (f && std::getline(f, line)) {
             if (line.rfind("title_muted=", 0) == 0) titleMuted = line.size() > 12 && line[12] == '1';
@@ -3663,10 +3949,12 @@ int main(int argc, char** argv) {
     int frame = 0;
     int shotFrame = (selftest && argc > 2) ? atoi(argv[2]) : 900;
     while (!WindowShouldClose()) {
-        if (IsKeyPressed(KEY_ESCAPE)) {
+        bool padBack = game.padPressed(GAMEPAD_BUTTON_MIDDLE_LEFT);   // controller Back / View = Esc (never quits)
+        if (IsKeyPressed(KEY_ESCAPE) || padBack) {
             if (game.stageDialog) game.stageDialog = false;
             else if (game.escMenu) game.escMenu = false;               // ESC again = resume
-            else if (game.mode == TITLE) break;                         // title screen: quit as before
+            else if (game.mode == TITLE && game.medalsOpen) game.medalsOpen = false;
+            else if (game.mode == TITLE) { if (!padBack) break; }       // title screen: Esc quits as before
             else game.openEscMenu();
         }
         if (IsKeyPressed(KEY_F11) || ((IsKeyDown(KEY_LEFT_ALT) || IsKeyDown(KEY_RIGHT_ALT)) && IsKeyPressed(KEY_ENTER)))
@@ -3683,7 +3971,8 @@ int main(int argc, char** argv) {
             if (getenv("SS_ESCDO") && frame == atoi(getenv("SS_ESCDO"))) game.escChoose(game.escSel);
         }
         if (selftest && argc > 3 && std::string(argv[3]) == "break" && frame == shotFrame - 6 && game.shield) game.breakShield({ game.player.x, game.player.y - SHIELD_RADIUS });
-        game.update(dt);
+        game.update(dt * game.timeScale());   // boss-kill slow motion
+        game.tickRealTime(dt);
         game.updateTitleAudio(dt);
         game.updateGameMusic(dt);
         if (game.quitRequested) break;
@@ -3696,6 +3985,7 @@ int main(int argc, char** argv) {
     if (game.score >= game.hiScore) game.saveHiScore();
     if (game.customFont) UnloadFont(game.font);
     gfx.unload();
+    rumble::set(0, 0, 0);
     game.unloadGameMusic();
     game.unloadTitleAudio();
     game.unloadSfx();

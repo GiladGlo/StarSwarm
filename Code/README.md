@@ -41,6 +41,7 @@ The bottom of the screen is a status bar with four fixed areas, so indicators ne
 | Esc | Pause menu: **Resume game**, **End current game** (back to the title screen) or **Exit to desktop**. Pick with ↑/↓ + Enter, keys 1–3 or the mouse; Esc again resumes. On the title screen Esc quits |
 | F11 / Alt+Enter | Toggle fullscreen |
 | M | Mute / unmute the music (title screen: title music + effects; in game: background music only). Also the speaker icons in the corners |
+| Tab | Title screen: open / close the **Medals** screen (also the medal button next to the mute button) |
 
 **Your fighter:** a detailed ship (panelled wings with flaps, missile pods, ribbed cannons, engine intakes and petalled nozzles, framed canopy with a pilot) with live effects: it banks into turns, its twin engines burn with shock-diamond plumes and stream exhaust, side thrusters puff on sharp direction changes, red/green wingtip and white tail lights strobe, a glint sweeps across the canopy, the cannons flash when firing, and it warps in on every (re)spawn.
 
@@ -140,6 +141,62 @@ Extra ship at 20,000, then every 50,000. Each stage gets faster, with more simul
 ## GitHub auto-push
 
 Run `Code\tools\setup-autopush.cmd` once: it does the first push to https://github.com/GiladGlo/StarSwarm and creates a Windows scheduled task (*StarSwarm AutoPush*) that every 15 minutes commits any pending changes and pushes new commits, silently. Activity is logged in `autopush.log` (repo root, not committed). Remove with `schtasks /Delete /TN "StarSwarm AutoPush" /F`.
+
+## Controller
+
+Xbox and PlayStation controllers work alongside the keyboard (the first connected controller is used):
+
+| Button | Action |
+|---|---|
+| Left stick / D-pad | Move (analog on the stick) |
+| A / Right trigger | Fire (hold) |
+| Start | Start game (title) / pause |
+| Back / View | Pause menu (D-pad to choose, A to confirm, B to resume) |
+| Y | Mute / unmute the music |
+| X | Title screen: open / close the Medals screen |
+
+With a controller connected, the title prompt reads "PRESS SPACE OR (A) TO START".
+
+**Rumble** (Xbox-compatible controllers on Windows, through XInput):
+
+| Event | Rumble |
+|---|---|
+| Ion Burst shot | Light |
+| Shield breaking | Medium |
+| Losing a ship or destroying a boss | Strong |
+
+## Medals
+
+16 medals reward skill and progress. When you earn one, a gold "MEDAL UNLOCKED" banner slides in below the score. On the title screen, the medal button (or **Tab** / **X**) opens a 4×4 grid: earned medals in gold, locked ones grey. Select one to see how to earn it. Medals and the lifetime Courier and flak counters are saved in `starswarm_medals.txt`. Debug runs (Ctrl+L) never earn medals.
+
+| Medal | How to earn it |
+|---|---|
+| Untouchable | Clear a meteor field without taking a hit |
+| Flawless Sector | Clear a whole sector without losing a ship |
+| Purist | Defeat a boss with the Photon Torpedo at Lv0 |
+| Outpost Raider | Destroy all 3 mining outposts in one field |
+| Chain Reaction | Destroy 5 rocks with one volatile blast (chain reactions count) |
+| Sharpshooter | Finish a wave with 80% accuracy or better |
+| Courier Hunter | Destroy 25 Couriers (lifetime) |
+| Max Power | Reach Lv3 with any weapon |
+| Arsenal | Use all five weapons in one game |
+| Wingman | Call in the wingman drone |
+| Flak Dancer | Shoot down 20 outpost flak shells (lifetime) |
+| Blitz | Destroy a boss in under 30 seconds |
+| Sector 2 | Make your first hyperspace jump |
+| Halfway There | Defeat the 5th capital ship |
+| No Continues | Reach sector 6 without losing a ship |
+| Savior | Defeat all ten capital ships |
+
+## Boss kill and sector summary
+
+When a boss's core detonates, the game drops into slow motion with a white flash, then eases back to full speed over about 1.5 s. A **SECTOR CLEARED** panel then shows:
+
+- sector time, accuracy, ships lost, outposts destroyed and boss time
+- the medals earned in that sector
+- the **sector bonus**: 1,000 × the sector number, +2,000 if no ships were lost, +1,000 for 70% accuracy or better, and +500 per outpost destroyed
+
+The hyperspace jump follows after 6 s, or sooner if you press Space (or A).
 
 ## Sound
 
