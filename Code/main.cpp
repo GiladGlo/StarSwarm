@@ -1891,7 +1891,7 @@ struct Game {
         }
     }
     void updateEscMenu() {
-        if (gameMuteVisible() && (IsKeyPressed(KEY_M) || padPressed(GAMEPAD_BUTTON_RIGHT_FACE_UP) || (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(mouseLogical(), TOUCH_UI ? GAME_MUTE_HIT : GAME_MUTE_BTN)))){
+        if (gameMuteVisible() && (IsKeyPressed(KEY_M) || padPressed(GAMEPAD_BUTTON_RIGHT_FACE_UP) || (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(mouseLogical(), hudTopRect(TOUCH_UI ? GAME_MUTE_HIT : GAME_MUTE_BTN))))){
             toggleGameMusicMute(); return;   // music mute stays usable while the menu is open
         }
         if (padPressed(GAMEPAD_BUTTON_RIGHT_FACE_RIGHT)) { escMenu = false; return; }   // B = resume
@@ -1909,6 +1909,10 @@ struct Game {
     }
     void drawEscMenuShapes() {
         DrawRectangle(0, 0, W, H, Color{ 0, 0, 0, 170 });
+        if (bandTop > 0) bandShapes(0, [&] {                   // dim the HUD in the bands too
+            DrawRectangleRec({ 0, -bandTop, (float)W, bandTop }, Color{ 0, 0, 0, 170 });
+            DrawRectangleRec({ 0, (float)H, (float)W, bandBot }, Color{ 0, 0, 0, 170 });
+        }, true);
         Rectangle box = escBox();
         DrawRectangleRounded(box, 0.07f, 10, Color{ 18, 20, 44, 245 });
         DrawRectangleRoundedLinesEx(box, 0.07f, 10, 2, Color{ 90, 180, 255, 200 });
@@ -1976,9 +1980,9 @@ struct Game {
             return;
         }
 
-        if (IsKeyPressed(KEY_M) || padPressed(GAMEPAD_BUTTON_RIGHT_FACE_UP) || (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(mouseLogical(), TOUCH_UI ? GAME_MUTE_HIT : GAME_MUTE_BTN))) toggleGameMusicMute();
+        if (IsKeyPressed(KEY_M) || padPressed(GAMEPAD_BUTTON_RIGHT_FACE_UP) || (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(mouseLogical(), hudTopRect(TOUCH_UI ? GAME_MUTE_HIT : GAME_MUTE_BTN)))) toggleGameMusicMute();
         if (IsKeyPressed(KEY_P) || padPressed(GAMEPAD_BUTTON_MIDDLE_RIGHT)) paused = !paused;
-        if (TOUCH_UI && IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(mouseLogical(), GAME_PAUSE_HIT)) { openEscMenu(); return; }
+        if (TOUCH_UI && IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(mouseLogical(), hudTopRect(GAME_PAUSE_HIT))) { openEscMenu(); return; }
         if (paused) return;
         if (sectorPanel) {                                // SECTOR CLEARED: 6 s, or Space / A after a short beat
             sectorPanelT += dt;
@@ -3034,31 +3038,92 @@ struct Game {
     }
     float loadT = 0;
 
+    // Tall screens (phones): the 600x800 playfield keeps its size and the spare space above and below it (the
+    // "bands") shows the background, with the top HUD moved up into the top band and the status bar down into the
+    // bottom band, so the playfield is clear of both. A 3:4 window has no bands and looks exactly as before.
+    static constexpr float TOP_HUD_H = 96;            // score / high score / buttons / boss bar block (y 0..~90)
+    static constexpr float BOTTOM_HUD_H = 46;         // status bar (42) + a small gap
+    float bandTop = 0, bandBot = 0;                   // spare space above / below the playfield (logical units)
+    float hudTopDy = 0, hudBotDy = 0;                 // how far the top HUD moves up (<= 0) and the status bar down
+    Camera2D viewCam{};                               // the playfield camera of the current frame (with shake)
+    float hudDy = 0;                                  // vertical offset applied by text() while drawing a band HUD
+
     void computeView() {
         float sw = (float)GetScreenWidth(), sh = (float)GetScreenHeight();
         scale  = std::min(sw / W, sh / H);
         origin = { (sw - W * scale) / 2, (sh - H * scale) / 2 };
+        bandTop = bandBot = std::max(0.0f, (sh / scale - H) / 2);
+        hudTopDy = -std::min(bandTop, TOP_HUD_H);
+        hudBotDy = std::min(bandBot, BOTTOM_HUD_H);
+    }
+    Rectangle hudTopRect(Rectangle r) const { r.y += hudTopDy; return r; }   // a top-HUD button where it is drawn
+    void beginPlayfieldClip() { BeginScissorMode((int)origin.x, (int)origin.y, (int)ceilf(W * scale), (int)ceilf(H * scale)); }
+    void beginScreenClip() { BeginScissorMode(0, 0, GetScreenWidth(), GetScreenHeight()); }
+    // Draw shapes (inside the playfield camera) or text (outside it) moved by dy into a band, unclipped.
+    template <class F> void bandShapes(float dy, F f, bool unclipped = false) {
+        if (dy == 0 && !unclipped) { f(); return; }
+        EndMode2D(); EndScissorMode(); beginScreenClip();
+        Camera2D c = viewCam; c.offset.y += dy * scale;
+        BeginMode2D(c); f(); EndMode2D();
+        EndScissorMode(); beginPlayfieldClip(); BeginMode2D(viewCam);
+    }
+    template <class F> void bandText(float dy, F f) {
+        if (dy == 0) { f(); return; }
+        EndScissorMode(); beginScreenClip();
+        hudDy = dy; f(); hudDy = 0;
+        EndScissorMode(); beginPlayfieldClip();
     }
 
     // Text drawn in screen space at the real pixel size, so it stays sharp at any scale.
     void text(const char* t, float x, float y, float size, Color c, bool centered = false, float dx = 0) {
         float fs = size * scale, sp = customFont ? fs * 0.04f : fs / 10;
         if (centered) x = W / 2.0f - MeasureTextEx(font, t, fs, sp).x / scale / 2 + dx;
-        DrawTextEx(font, t, { origin.x + x * scale, origin.y + y * scale }, fs, sp, c);
+        DrawTextEx(font, t, { origin.x + x * scale, origin.y + (y + hudDy) * scale }, fs, sp, c);
     }
     void drawCentered(const char* t, float y, float size, Color c) { text(t, 0, y, size, c, true); }
+
+    // The background continued into the bands above and below the playfield (tall screens): the sky's end colours,
+    // the same scrolling nebula (a tileable texture) and the starfield repeated one playfield-height up and down
+    // (stars wrap at H), so everything lines up seamlessly with the playfield drawn on top of it.
+    void drawBandBackground(const Theme& th) {
+        float y0 = -bandTop, y1 = H + bandBot;
+        beginScreenClip();
+        BeginMode2D(Camera2D{ origin, { 0, 0 }, 0, scale });
+        DrawRectangleRec({ 0, y0, (float)W, -y0 }, th.top);
+        DrawRectangleRec({ 0, (float)H, (float)W, y1 - H }, th.bottom);
+        float scroll = fmodf(time * 6.0f, (float)H), k = gfx.nebula.height / (float)H;
+        DrawTexturePro(gfx.nebula, { 0, (y0 - scroll) * k, (float)gfx.nebula.width, (y1 - y0) * k }, { 0, y0, (float)W, y1 - y0 }, { 0, 0 }, 0, th.neb);
+        BeginBlendMode(BLEND_ADDITIVE);
+        float starFade = 1 - hyperStreak();
+        for (auto& s : stars)
+            for (float off : { -(float)H, (float)H }) {
+                float y = s.pos.y + off;
+                if (y < y0 || y > y1) continue;
+                float tw = 0.5f + 0.5f * sinf(time * 3 + s.phase);
+                Color c = s.col; c.a = (unsigned char)(std::min(255.0f, 60 + 195 * tw * (s.speed / 150.0f)) * starFade);
+                float sz = s.speed > 100 ? 1.4f : 0.9f;
+                DrawRectangleV({ s.pos.x - sz / 2, y - sz / 2 }, { sz, sz * (mode == PLAYING ? 2.2f : 1.0f) }, c);
+            }
+        EndBlendMode();
+        DrawRectangleGradientV(0, (int)y0, W, (int)(bandTop * 0.6f), Color{ 0, 0, 0, 120 }, Color{ 0, 0, 0, 0 });   // soft fade at the
+        DrawRectangleGradientV(0, (int)(y1 - bandBot * 0.6f), W, (int)(bandBot * 0.6f) + 1, Color{ 0, 0, 0, 0 }, Color{ 0, 0, 0, 120 });   // screen edges
+        EndMode2D();
+        EndScissorMode();
+    }
 
     // --- draw ---------------------------------------------------------------
     void draw() {
         computeView();
         BeginDrawing();
         ClearBackground(BLACK);   // letterbox bars
-        BeginScissorMode((int)origin.x, (int)origin.y, (int)ceilf(W * scale), (int)ceilf(H * scale));
+        const Theme& th = THEMES[mode == TITLE ? 0 : cycleIndex()];
+        if (bandTop > 0) drawBandBackground(th);
+        beginPlayfieldClip();
 
         Camera2D cam{}; cam.zoom = scale; cam.offset = origin;
         if (shake > 0) cam.offset = Vector2Add(origin, { frand(-6, 6) * shake * scale, frand(-6, 6) * shake * scale });
+        viewCam = cam;
         BeginMode2D(cam);
-        const Theme& th = THEMES[mode == TITLE ? 0 : cycleIndex()];
         DrawRectangleGradientV(0, 0, W, H, th.top, th.bottom);
         if (mode != TITLE) {   // distant body for this cycle, drifting very slowly
             int ci = cycleIndex();
@@ -3363,7 +3428,7 @@ struct Game {
         }
         for (auto& pk : packages) drawPackage(pk.content, pk.pos, 44, pk.t);
         drawHudShapes();
-        if (escMenu) { drawEscMenuShapes(); if (gameMuteVisible()) drawGameMuteButton(); }   // mute button stays on top of the menu dimming
+        if (escMenu) { drawEscMenuShapes(); if (gameMuteVisible()) bandShapes(hudTopDy, [&] { drawGameMuteButton(); }); }   // mute button stays on top of the menu dimming
         EndMode2D();
 
         if (escMenu) { drawEscMenuText(); EndScissorMode(); EndDrawing(); return; }
@@ -3685,7 +3750,7 @@ struct Game {
     static constexpr Rectangle GAME_MUTE_BTN{ W - 36.0f, 8, 28, 28 };
     bool gameMuteVisible() const { return mode == PLAYING; }
     void toggleGameMusicMute() { gameMusicMuted = !gameMusicMuted; saveSettings(); }
-    void drawGameMuteButton() { drawSpeakerButton(GAME_MUTE_BTN, gameMusicMuted, CheckCollisionPointRec(mouseLogical(), GAME_MUTE_BTN)); }
+    void drawGameMuteButton() { drawSpeakerButton(GAME_MUTE_BTN, gameMusicMuted, CheckCollisionPointRec(mouseLogical(), hudTopRect(GAME_MUTE_BTN))); }
 
     // ---- Touch controls (Android) ----
     static constexpr Rectangle GAME_PAUSE_BTN{ W - 72.0f, 8, 28, 28 };   // on-screen pause, left of the music button
@@ -3697,7 +3762,7 @@ struct Game {
     static Rectangle grow(Rectangle r, float d) { return { r.x - d, r.y - d, r.width + 2 * d, r.height + 2 * d }; }
     bool onHudButton(Vector2 p) const {
         if (mode == TITLE) return CheckCollisionPointRec(p, grow(MUTE_BTN, 8)) || CheckCollisionPointRec(p, grow(MEDAL_BTN, 8));
-        return gameMuteVisible() && (CheckCollisionPointRec(p, GAME_MUTE_HIT) || CheckCollisionPointRec(p, GAME_PAUSE_HIT));
+        return gameMuteVisible() && (CheckCollisionPointRec(p, hudTopRect(GAME_MUTE_HIT)) || CheckCollisionPointRec(p, hudTopRect(GAME_PAUSE_HIT)));
     }
     // a tap that isn't on one of the small HUD buttons ("TAP TO START" / "TAP TO CONTINUE")
     bool touchTap() const { return TOUCH_UI && IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && !onHudButton(mouseLogical()); }
@@ -3776,14 +3841,29 @@ struct Game {
             drawMedalButton();
             return;
         }
+        bandShapes(hudBotDy, [&] { drawStatusBarShapes(); });
+        bandShapes(hudTopDy, [&] { drawTopHudShapes(); });
+        if (mode == GAMEOVER) DrawRectangle(0, H / 2 - 120, W, 240, Color{ 0, 0, 0, 170 });
+        if (mode == VICTORY)  DrawRectangle(0, H / 2 - 170, W, 330, Color{ 0, 0, 0, 150 });
+    }
+    // bottom status bar: panel, spare ships, weapon, campaign bar, shield recharge
+    void drawStatusBarShapes() {
         if (mode == PLAYING || mode == VICTORY || mode == GAMEOVER) drawStatusPanel();
-        if (gameMuteVisible()) { drawGameMuteButton(); if (TOUCH_UI && !escMenu) drawGamePauseButton(); }
         {   int spare = std::max(0, lives - (playerAlive ? 1 : 0));
             if (spare <= 4) for (int i = 0; i < spare; ++i) drawShip(gfx.player, { SB_LIVES_X + 15 + i * 28.0f, H - 21.0f }, 26, 0, false);
             else drawShip(gfx.player, { SB_LIVES_X + 15, H - 21.0f }, 26, 0, false);   // "x N" label drawn with the HUD text
         }
         if (mode == PLAYING || mode == VICTORY) drawWeaponIndicator();
         if (mode == PLAYING || mode == VICTORY || mode == GAMEOVER) drawCampaignBar();
+        if (mode == PLAYING && playerAlive && !shield && shieldRegen > 0) {   // shield recharge bar under the label
+            float f = 1 - shieldRegen / SHIELD_REGEN_TIME, bw = 76, x = SB_SHIELD_CX - bw / 2, y = H - 13.0f;
+            DrawRectangleRounded({ x, y, bw, 3.5f }, 1, 6, Color{ 40, 30, 36, 220 });
+            DrawRectangleRounded({ x, y, std::max(3.5f, bw * f), 3.5f }, 1, 6, Color{ (unsigned char)(140 - 30 * f), (unsigned char)(90 + 120 * f), (unsigned char)(90 + 165 * f), 255 });
+        }
+    }
+    // top HUD: music / pause buttons, boss health bar, meteor-field progress
+    void drawTopHudShapes() {
+        if (gameMuteVisible()) { drawGameMuteButton(); if (TOUCH_UI && !escMenu) drawGamePauseButton(); }
         if (boss.active && boss.state != B_ENTER) {
             float bw = 340, x = W / 2.0f - bw / 2, y = 76, f = std::max(0.0f, boss.hp / boss.maxHp);
             DrawRectangleRounded({ x - 3, y - 3, bw + 6, 16 }, 0.5f, 6, Color{ 0, 0, 0, 170 });
@@ -3798,13 +3878,6 @@ struct Game {
             DrawRectangleRounded({ x, y, bw, 6 }, 0.5f, 6, Color{ 50, 40, 30, 255 });
             if (f > 0) DrawRectangleRounded({ x, y, bw * f, 6 }, 0.5f, 6, Color{ 220, 150, 70, 255 });
         }
-        if (mode == PLAYING && playerAlive && !shield && shieldRegen > 0) {   // shield recharge bar under the label
-            float f = 1 - shieldRegen / SHIELD_REGEN_TIME, bw = 76, x = SB_SHIELD_CX - bw / 2, y = H - 13.0f;
-            DrawRectangleRounded({ x, y, bw, 3.5f }, 1, 6, Color{ 40, 30, 36, 220 });
-            DrawRectangleRounded({ x, y, std::max(3.5f, bw * f), 3.5f }, 1, 6, Color{ (unsigned char)(140 - 30 * f), (unsigned char)(90 + 120 * f), (unsigned char)(90 + 165 * f), 255 });
-        }
-        if (mode == GAMEOVER) DrawRectangle(0, H / 2 - 120, W, 240, Color{ 0, 0, 0, 170 });
-        if (mode == VICTORY)  DrawRectangle(0, H / 2 - 170, W, 330, Color{ 0, 0, 0, 150 });
     }
 
     // Campaign bar (bottom right): progress through all 60 stages, one crest per boss (gold once defeated).
@@ -3864,24 +3937,8 @@ struct Game {
             return;
         }
 
-        text("1UP", 20, 10, 18, RED);
-        if (droneOn && playerAlive && (mode == PLAYING || mode == VICTORY)) {   // drone timer label
-            text(TextFormat("DRONE %d", (int)ceilf(droneT)), SB_WEAPON_X + 70 + 6, H - 31, 10, Color{ 170, 255, 190, 255 });
-        }
-        if (mode == PLAYING || mode == VICTORY || mode == GAMEOVER) {   // campaign bar labels
-            text(TextFormat("STAGE %d", mode == VICTORY ? FINAL_STAGE : stage), CB_X0, H - 37, 12, RAYWHITE);
-            text(TextFormat("/ %d", FINAL_STAGE), CB_X1 - 32, H - 35, 9, Color{ 150, 160, 190, 255 });
-        }
-        if (mode == PLAYING || mode == VICTORY || mode == GAMEOVER) {   // spare-ship count when there are more than 4
-            int spare = std::max(0, lives - (playerAlive ? 1 : 0));
-            if (spare > 4) text(TextFormat("x %d", spare), SB_LIVES_X + 32, H - 30, 15, RAYWHITE);
-        }
-        if (mode == PLAYING && playerAlive)
-            textCenteredAt(shield ? "SHIELD" : shieldRegen > 0 ? TextFormat("SHIELD  %d", (int)ceilf(shieldRegen)) : "SHIELD DOWN", SB_SHIELD_CX, H - 33, 15,
-                 shield ? Color{ 110, 210, 255, 255 } : Color{ 140, 90, 90, 255 });
-        text(TextFormat("%d", score), 20, 30, 22, RAYWHITE);
-        drawCentered("HIGH SCORE", 10, 18, RED);
-        drawCentered(TextFormat("%d", hiScore), 30, 22, RAYWHITE);
+        bandText(hudBotDy, [&] { drawStatusBarText(); });
+        bandText(hudTopDy, [&] { drawTopHudText(); });
 
         if (mode == PLAYING && bannerTimer > 0) {
             if (boss.active && boss.state == B_ENTER) {
@@ -3902,6 +3959,17 @@ struct Game {
                 if (intro) drawCentered(intro, H / 2 + 36, 15, Color{ 255, 210, 120, 255 });
             }
         }
+        if (mode == PLAYING && !playerAlive && lives > 0 && respawnTimer < 1.5f)
+            drawCentered("READY", H / 2 + 30, 32, RED);
+        if (paused) drawCentered("PAUSED", H / 2 - 20, 44, YELLOW);
+        drawEndScreenText();
+    }
+    // top HUD text: score, high score, boss name, meteor-field label, debug info
+    void drawTopHudText() {
+        text("1UP", 20, 10, 18, RED);
+        text(TextFormat("%d", score), 20, 30, 22, RAYWHITE);
+        drawCentered("HIGH SCORE", 10, 18, RED);
+        drawCentered(TextFormat("%d", hiScore), 30, 22, RAYWHITE);
         if (boss.active && boss.state != B_ENTER)
             drawCentered(TextFormat("%s  -  %d / %d", boss.D().name, boss.index + 1, BOSS_COUNT), 58, 14, Color{ 255, 170, 210, 255 });
         if (debugRun && mode != TITLE) text("DEBUG", W - 112, 14, 14, Color{ 255, 200, 60, 255 });
@@ -3909,10 +3977,26 @@ struct Game {
             drawCentered("METEOR FIELD", 58, 14, Color{ 230, 170, 110, 255 });
             if (debugRun) text(TextFormat("density %2.0f%%", density() * 100), W - 110, 32, 13, Color{ 255, 200, 60, 255 });
         }
-        if (mode == PLAYING && !playerAlive && lives > 0 && respawnTimer < 1.5f)
-            drawCentered("READY", H / 2 + 30, 32, RED);
-        if (paused) drawCentered("PAUSED", H / 2 - 20, 44, YELLOW);
-
+    }
+    // status bar text: drone timer, stage, spare-ship count, shield
+    void drawStatusBarText() {
+        if (droneOn && playerAlive && (mode == PLAYING || mode == VICTORY)) {   // drone timer label
+            text(TextFormat("DRONE %d", (int)ceilf(droneT)), SB_WEAPON_X + 70 + 6, H - 31, 10, Color{ 170, 255, 190, 255 });
+        }
+        if (mode == PLAYING || mode == VICTORY || mode == GAMEOVER) {   // campaign bar labels
+            text(TextFormat("STAGE %d", mode == VICTORY ? FINAL_STAGE : stage), CB_X0, H - 37, 12, RAYWHITE);
+            text(TextFormat("/ %d", FINAL_STAGE), CB_X1 - 32, H - 35, 9, Color{ 150, 160, 190, 255 });
+        }
+        if (mode == PLAYING || mode == VICTORY || mode == GAMEOVER) {   // spare-ship count when there are more than 4
+            int spare = std::max(0, lives - (playerAlive ? 1 : 0));
+            if (spare > 4) text(TextFormat("x %d", spare), SB_LIVES_X + 32, H - 30, 15, RAYWHITE);
+        }
+        if (mode == PLAYING && playerAlive)
+            textCenteredAt(shield ? "SHIELD" : shieldRegen > 0 ? TextFormat("SHIELD  %d", (int)ceilf(shieldRegen)) : "SHIELD DOWN", SB_SHIELD_CX, H - 33, 15,
+                 shield ? Color{ 110, 210, 255, 255 } : Color{ 140, 90, 90, 255 });
+    }
+    // VICTORY / GAME OVER texts (playfield centre)
+    void drawEndScreenText() {
         if (mode == VICTORY) {
             float bob = sinf(time * 2) * 5;
             drawCentered("VICTORY!", H / 2 - 150 + bob, 64, GOLD);

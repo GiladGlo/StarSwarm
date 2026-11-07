@@ -1,4 +1,8 @@
 cmake_minimum_required(VERSION 3.16)
+# MSVC: link the C/C++ runtime statically (/MT), for raylib too (CMP0091 forced on for its older CMake files),
+# so the exe runs on any Windows PC without the Visual C++ Redistributable.
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+set(CMAKE_POLICY_DEFAULT_CMP0091 NEW)
 project(StarSwarm CXX C)
 
 set(CMAKE_CXX_STANDARD 17)

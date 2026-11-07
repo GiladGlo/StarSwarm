@@ -22,7 +22,10 @@ Fly through 60 stages across 10 sectors. Each sector brings four alien waves, a 
 
 ## Play
 
-Download the latest build from **[Releases](https://github.com/GiladGlo/StarSwarm/releases/latest)** (Windows 64-bit, nothing to install). Each release lists SHA-256 checksums so you can verify the download. The build is not code-signed, so Windows SmartScreen may show a warning on first run. If you'd rather not run a downloaded exe, you can build it from source using the instructions in [Code/README.md](Code/README.md).
+Download the latest build from **[Releases](https://github.com/GiladGlo/StarSwarm/releases/latest)**. Each release lists SHA-256 checksums so you can verify the download. If you'd rather not run a downloaded file, you can build it from source using the instructions in [Code/README.md](Code/README.md).
+
+- **Windows** (64-bit, nothing to install): run the `.exe`. The build is not code-signed, so Windows SmartScreen may show a warning on first run.
+- **Android** (7.0 or later, 64-bit): open the `.apk` on your phone and allow the install. The APK isn't from the Play Store, so Android asks you to allow installs from the app you opened it with.
 
 | Key | Action |
 |---|---|
@@ -32,6 +35,8 @@ Download the latest build from **[Releases](https://github.com/GiladGlo/StarSwar
 | M | Mute / unmute music |
 | F11 / Alt+Enter | Fullscreen |
 
+Controllers work too. On Android, **drag anywhere** to fly (the ship moves with your finger and fires while you hold), and tap **II** or press **Back** to pause.
+
 Full gameplay details, scoring and build instructions: [Code/README.md](Code/README.md).
 
 ## How it was built and tested
@@ -40,7 +45,7 @@ Star Swarm was built with Claude as an AI pair programmer, and nearly every comm
 
 QA ran on every change. After each change, Claude built the game, ran it, and checked screenshots and logs to confirm the new behaviour worked and nothing else had broken, before the change was committed.
 
-*Written in C++ with raylib. Runs as a single Windows executable with nothing else to install.*
+*Written in C++ with raylib. Runs as a single Windows executable with nothing else to install, and as an Android app.*
 
 ## License
 
