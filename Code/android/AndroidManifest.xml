@@ -10,12 +10,16 @@
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
     <uses-feature android:name="android.hardware.gamepad" android:required="false" />
 
+    <!-- enableOnBackInvokedCallback=false: deliver the Back key to the game (it pauses / resumes) instead of
+         Android 16+ predictive back closing the activity -->
     <application
         android:label="Star Swarm"
         android:icon="@mipmap/ic_launcher"
         android:hasCode="false"
+        android:extractNativeLibs="false"
         android:appCategory="game"
         android:isGame="true"
+        android:enableOnBackInvokedCallback="false"
         android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
         <activity
             android:name="android.app.NativeActivity"

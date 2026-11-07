@@ -21,6 +21,16 @@ cmake --build build -j
 ```
 Linux needs X11/GL dev packages: `sudo apt install libx11-dev libxcursor-dev libxrandr-dev libxinerama-dev libxi-dev libgl1-mesa-dev`
 
+**Android (Windows host):** needs the Android SDK with an NDK, CMake and build-tools, plus a JDK (Android Studio installs all of them). No Gradle: the game builds as `libmain.so` for a `NativeActivity` and the script packs, aligns and signs the APK.
+```
+cd android
+.\build-apk.ps1                      # arm64-v8a + x86_64 -> build-android\StarSwarm.apk
+.\build-apk.ps1 -Abis x86_64 -Run    # emulator build, install and launch on the running emulator/device
+```
+The APK is signed with the standard debug key, which is fine for testing and sideloading. A Play Store release needs your own key. On Android the game runs full screen in portrait at the display's native resolution, with OpenGL ES 3.0 (the 3D asteroids use the same shader). It keeps its save file and startup cache in the app's private storage.
+
+Touch controls: **drag anywhere** to move the ship. It follows your finger's movement, so your finger doesn't cover it, and it fires while your finger is down. Lift to stop firing, which also lets the Pulse beam cool. **Tap** to start or continue. The **II** button or the phone's **Back** button opens the pause menu, and the game pauses itself when you leave the app. Controllers work as on the PC.
+
 ## Title screen
 
 The titles **STAR SWARM**, **Developed by GILAD GLOBEN** and **Dedicated to DANIEL GLOBEN** are spelled by swarms of tiny animated monsters (Nebula Jellies, Void Mantas and Nova Urchins). Each swarm streams in from both sides along curved entry paths, holds as a gently breathing formation for a few seconds, then peels off left to right and dives away as the next swarm arrives (7 s per title).

@@ -3,6 +3,7 @@
 #
 #   .\build-apk.ps1                      # arm64-v8a (phones) + x86_64 (emulator) -> build-android\StarSwarm.apk
 #   .\build-apk.ps1 -Abis x86_64 -Run    # emulator-only build, then install and launch on the running device
+#   -Debuggable                          # test builds: lets `adb shell run-as` read the app's files
 #
 # Needs the Android SDK (platform, build-tools, NDK, CMake) and a JDK; Android Studio installs all of them.
 # Signed with the standard debug key (~/.android/debug.keystore, created if missing): fine for testing and
@@ -11,7 +12,8 @@ param(
     [string[]]$Abis = @("arm64-v8a", "x86_64"),
     [string]$Config = "Release",
     [switch]$Install,
-    [switch]$Run
+    [switch]$Run,
+    [switch]$Debuggable          # marks the APK debuggable (adb run-as can read the save file); testing only
 )
 $ErrorActionPreference = "Stop"
 $code = Split-Path $PSScriptRoot -Parent                       # ...\Code
@@ -23,8 +25,9 @@ function VersionOf($name) { $v = ($name -replace '^\D+', '') -replace '[^\d.].*$
 function Latest($dir) { Get-ChildItem $dir -Directory | Where-Object { $_.Name -match '\d' } | Sort-Object { VersionOf $_.Name } | Select-Object -Last 1 }
 function Run($exe) {   # native tools: judge by exit code (Windows PowerShell would otherwise treat warnings on stderr as errors)
     $ErrorActionPreference = "Continue"
-    & $exe @args 2>&1 | ForEach-Object { "$_" }
-    if ($LASTEXITCODE -ne 0) { throw "$(Split-Path $exe -Leaf) failed (exit $LASTEXITCODE)" }
+    $log = @(& $exe @args 2>&1 | ForEach-Object { "$_" })
+    if ($LASTEXITCODE -ne 0) { $log | Select-Object -Last 40 | Write-Host; throw "$(Split-Path $exe -Leaf) failed (exit $LASTEXITCODE)" }
+    $log | Select-Object -Last 1        # success: just the last line
 }
 
 # ---- tools ----
@@ -50,8 +53,8 @@ foreach ($abi in $Abis) {
     "`n== $abi =="
     Run "$cmBin\cmake.exe" -G Ninja -S $code -B $bd "-DCMAKE_MAKE_PROGRAM=$cmBin\ninja.exe" `
         "-DCMAKE_TOOLCHAIN_FILE=$ndk\build\cmake\android.toolchain.cmake" "-DANDROID_ABI=$abi" "-DANDROID_PLATFORM=android-$minSdk" `
-        "-DANDROID_STL=c++_static" "-DCMAKE_BUILD_TYPE=$Config" -Wno-dev | Select-Object -Last 1
-    Run "$cmBin\cmake.exe" --build $bd | Select-Object -Last 1
+        "-DANDROID_STL=c++_static" "-DCMAKE_BUILD_TYPE=$Config" -Wno-dev
+    Run "$cmBin\cmake.exe" --build $bd
     New-Item -ItemType Directory -Force "$stage\lib\$abi" | Out-Null
     Run $strip --strip-unneeded -o "$stage\lib\$abi\libmain.so" "$bd\libmain.so"
 }
@@ -60,15 +63,9 @@ foreach ($abi in $Abis) {
 "`n== APK =="
 $resZip = Join-Path $out "res.zip"; $unsigned = Join-Path $out "unaligned.apk"; $aligned = Join-Path $out "aligned.apk"; $apk = Join-Path $out "StarSwarm.apk"
 Run "$bt\aapt2.exe" compile --dir "$PSScriptRoot\res" -o $resZip
-Run "$bt\aapt2.exe" link -o $unsigned --manifest "$PSScriptRoot\AndroidManifest.xml" -I "$plat\android.jar" $resZip --min-sdk-version $minSdk
-Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
-$zip = [System.IO.Compression.ZipFile]::Open($unsigned, "Update")
-try {   # native libraries stored uncompressed so they can be loaded straight from the APK (zipalign pages them)
-    foreach ($so in Get-ChildItem -Recurse "$stage\lib" -Filter *.so) {
-        $entry = "lib/$($so.Directory.Name)/$($so.Name)"
-        [void][System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $so.FullName, $entry, [System.IO.Compression.CompressionLevel]::NoCompression)
-    }
-} finally { $zip.Dispose() }
+Run "$bt\aapt2.exe" link -o $unsigned --manifest "$PSScriptRoot\AndroidManifest.xml" -I "$plat\android.jar" $resZip --min-sdk-version $minSdk $(if ($Debuggable) { "--debug-mode" })
+# native libraries stored (-0, not deflated) so Android maps them straight from the APK (extractNativeLibs=false)
+Run "$env:JAVA_HOME\bin\jar.exe" -u -0 -M -f $unsigned -C $stage lib
 Run "$bt\zipalign.exe" -f -P 16 4 $unsigned $aligned                # 16 KB page alignment for the .so files
 
 $ks = "$env:USERPROFILE\.android\debug.keystore"

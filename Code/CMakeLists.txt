@@ -33,7 +33,8 @@ if(ANDROID)
   add_library(starswarm SHARED main.cpp)
   set_target_properties(starswarm PROPERTIES OUTPUT_NAME main)            # NativeActivity loads libmain.so
   target_include_directories(starswarm PRIVATE ${ANDROID_NDK}/sources/android/native_app_glue)
-  target_link_options(starswarm PRIVATE -u ANativeActivity_onCreate)    # keep the glue's entry point
+  # keep the glue's entry point; route android_main through main.cpp (one game per process)
+  target_link_options(starswarm PRIVATE -u ANativeActivity_onCreate -Wl,--wrap=android_main)
   target_link_libraries(starswarm PRIVATE raylib android log EGL GLESv3 OpenSLES)
 else()
   add_executable(starswarm main.cpp)

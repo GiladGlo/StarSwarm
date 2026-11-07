@@ -4359,16 +4359,38 @@ struct Loader {
 // is blocked then. Its app-command handler is wrapped so the game goes quiet and opens the pause menu instead.
 #include <android_native_app_glue.h>
 #include <GLES3/gl3.h>
+#include <unistd.h>
 extern "C" struct android_app* GetAndroidApp(void);
 // raylib 5.5's OpenGL ES 3 path calls the extension name glDrawBuffersEXT (rlActiveDrawBuffers); Android's GLES3
 // library exports the core glDrawBuffers, so the name is forwarded.
 extern "C" void glDrawBuffersEXT(GLsizei n, const GLenum* bufs) { glDrawBuffers(n, bufs); }
 static void (*raylibAppCmd)(struct android_app*, int32_t) = nullptr;
 static std::atomic<bool> appLostFocus{ false };
+static Game* runningGame = nullptr;
 static void appCmdHook(struct android_app* app, int32_t cmd) {
     raylibAppCmd(app, cmd);
-    if (cmd == APP_CMD_LOST_FOCUS || cmd == APP_CMD_PAUSE) { SetMasterVolume(0); appLostFocus = true; }
-    else if (cmd == APP_CMD_GAINED_FOCUS) SetMasterVolume(1);
+    switch (cmd) {
+    case APP_CMD_PAUSE:        // the app may be killed in the background without warning: keep the save current
+        if (runningGame) runningGame->saveHiScore();
+        [[fallthrough]];
+    case APP_CMD_LOST_FOCUS: SetMasterVolume(0); appLostFocus = true; break;
+    case APP_CMD_GAINED_FOCUS: SetMasterVolume(1); break;
+    case APP_CMD_DESTROY:
+        // raylib 5.5 bug: while unfocused its event loop blocks for the next event even after a destroy request,
+        // so the game never sees WindowShouldClose(). Marking the app active again lets the loop return.
+        raylibAppCmd(app, APP_CMD_GAINED_FOCUS);
+        break;
+    }
+}
+// One game per process. raylib keeps internal state that a second InitWindow() in the same process can't
+// reset, so when the activity ends the process ends too, and Android starts a fresh one next time.
+// (Linked with -Wl,--wrap=android_main: the native-app glue calls this, and this calls raylib's android_main.)
+extern "C" void __real_android_main(struct android_app* app);
+extern "C" void __wrap_android_main(struct android_app* app) {
+    static std::atomic<bool> started{ false };
+    if (started.exchange(true)) _exit(0);   // a new activity in a process whose game already ran: restart clean
+    __real_android_main(app);               // returns once the activity has finished and been destroyed
+    _exit(0);
 }
 #endif
 
@@ -4383,7 +4405,9 @@ int main(int argc, char** argv) {
     }
 #endif
 
-    SetConfigFlags(FLAG_VSYNC_HINT | FLAG_MSAA_4X_HINT | FLAG_WINDOW_RESIZABLE);
+    // No MSAA on Android: raylib requests it in the window's EGL config, which not every GPU (or the emulator)
+    // offers, and a failed config leaves no surface at all. Phone screens are dense enough without it.
+    SetConfigFlags(FLAG_VSYNC_HINT | FLAG_WINDOW_RESIZABLE | (TOUCH_UI ? 0 : FLAG_MSAA_4X_HINT));
     InitWindow(TOUCH_UI ? 0 : W, TOUCH_UI ? 0 : H, "Star Swarm");   // Android: 0x0 = the display's native size (sharp, no upscaling)
 #ifdef __ANDROID__
     raylibAppCmd = GetAndroidApp()->onAppCmd;
@@ -4408,6 +4432,9 @@ int main(int argc, char** argv) {
     SetRandomSeed((unsigned)std::time(nullptr));
 
     static Game game;
+#ifdef __ANDROID__
+    runningGame = &game;
+#endif
     game.initStars();
     game.loadHiScore();
     game.loadFont();
