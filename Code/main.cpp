@@ -27,6 +27,16 @@
 #include <ctime>
 #include <cctype>
 #include <algorithm>
+#include <iterator>
+
+// Android build: touch controls (drag to move + fire, tap for prompts, on-screen pause, Back = Esc) and phone storage.
+#ifdef __ANDROID__
+static constexpr bool TOUCH_UI = true;
+#else
+static constexpr bool TOUCH_UI = false;
+#endif
+// Pick the touch or keyboard wording for an on-screen hint
+static constexpr const char* hint(const char* keys, const char* touch) { return TOUCH_UI ? touch : keys; }
 
 static const int   W = 600;
 static const int   H = 800;
@@ -1855,7 +1865,7 @@ struct Game {
     static constexpr int ESC_N = 3;
     Rectangle escBox() const { return { 110, 255, W - 220.0f, 300 }; }
     Rectangle escBtn(int i) const { return { 150, 330 + i * 64.0f, W - 300.0f, 50 }; }
-    void openEscMenu() { escMenu = true; escSel = 0; paused = false; while (GetCharPressed()) {} }
+    void openEscMenu() { escMenu = true; escSel = 0; paused = false; touchDrag = false; while (GetCharPressed()) {} }
     // Back to the title screen with a clean playfield: nothing from the last game (enemies, rocks, boss,
     // shots, explosions, packages, popups, hyperspace, drone, laser hum) is left on screen.
     void returnToTitle() {
@@ -1881,7 +1891,7 @@ struct Game {
         }
     }
     void updateEscMenu() {
-        if (gameMuteVisible() && (IsKeyPressed(KEY_M) || padPressed(GAMEPAD_BUTTON_RIGHT_FACE_UP) || (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(mouseLogical(), GAME_MUTE_BTN)))) {
+        if (gameMuteVisible() && (IsKeyPressed(KEY_M) || padPressed(GAMEPAD_BUTTON_RIGHT_FACE_UP) || (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(mouseLogical(), TOUCH_UI ? GAME_MUTE_HIT : GAME_MUTE_BTN)))){
             toggleGameMusicMute(); return;   // music mute stays usable while the menu is open
         }
         if (padPressed(GAMEPAD_BUTTON_RIGHT_FACE_RIGHT)) { escMenu = false; return; }   // B = resume
@@ -1911,7 +1921,7 @@ struct Game {
     void drawEscMenuText() {
         Rectangle box = escBox();
         drawCentered("PAUSED", box.y + 22, 30, YELLOW);
-        const char* lbl[ESC_N] = { "RESUME GAME", "END CURRENT GAME", "EXIT TO DESKTOP" };
+        const char* lbl[ESC_N] = { "RESUME GAME", "END CURRENT GAME", hint("EXIT TO DESKTOP", "EXIT GAME") };
         float fs = 20 * scale, sp = customFont ? fs * 0.04f : fs / 10;
         for (int i = 0; i < ESC_N; ++i) {   // number and label in fixed left-aligned columns
             Rectangle r = escBtn(i);
@@ -1919,7 +1929,7 @@ struct Game {
             DrawTextEx(font, TextFormat("%d", i + 1), { origin.x + (r.x + 30) * scale, y }, fs, sp, Color{ 255, 230, 120, 255 });
             DrawTextEx(font, lbl[i], { origin.x + (r.x + 72) * scale, y }, fs, sp, RAYWHITE);
         }
-        drawCentered("UP/DOWN select    ENTER confirm    ESC resume", box.y + box.height - 30, 13, GRAY);
+        drawCentered(hint("UP/DOWN select    ENTER confirm    ESC resume", "TAP to choose    BACK resume"), box.y + box.height - 30, 13, GRAY);
     }
 
     // --- update -------------------------------------------------------------
@@ -1940,7 +1950,7 @@ struct Game {
             if (IsKeyPressed(KEY_M) || padPressed(GAMEPAD_BUTTON_RIGHT_FACE_UP) || (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(mouseLogical(), MUTE_BTN))) toggleTitleMute();
             if (IsKeyPressed(KEY_TAB) || padPressed(GAMEPAD_BUTTON_RIGHT_FACE_LEFT) || (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(mouseLogical(), MEDAL_BTN))) { medalsOpen = true; medalSel = 0; return; }
             if (ctrl && IsKeyPressed(KEY_L)) { stageDialog = true; dlgText = "1"; while (GetCharPressed()) {} return; }
-            if (IsKeyPressed(KEY_SPACE) || padConfirm() || (IsKeyPressed(KEY_ENTER) && !alt)) { debugRun = false; newGame(); }
+            if (IsKeyPressed(KEY_SPACE) || padConfirm() || (IsKeyPressed(KEY_ENTER) && !alt) || touchTap()) { debugRun = false; newGame(); }
             return;
         }
         if (mode == VICTORY) {
@@ -1954,24 +1964,25 @@ struct Game {
                 explode(p, cs[GetRandomValue(0, 5)], WHITE, 40, 260);
                 playSfx(SFX_BOOM);
             }
-            if (stageTimer > 3.0f && (IsKeyPressed(KEY_SPACE) || IsKeyPressed(KEY_ENTER) || padConfirm())) returnToTitle();
+            if (stageTimer > 3.0f && (IsKeyPressed(KEY_SPACE) || IsKeyPressed(KEY_ENTER) || padConfirm() || touchTap())) returnToTitle();
             return;
         }
         if (mode == GAMEOVER) {
             updateEnemies(dt);
             updateBoss(dt);
             updateMeteors(dt);
-            if (stageTimer > 2.0f && (IsKeyPressed(KEY_SPACE) || IsKeyPressed(KEY_ENTER) || padConfirm())) returnToTitle();
+            if (stageTimer > 2.0f && (IsKeyPressed(KEY_SPACE) || IsKeyPressed(KEY_ENTER) || padConfirm() || touchTap())) returnToTitle();
             stageTimer += dt;
             return;
         }
 
-        if (IsKeyPressed(KEY_M) || padPressed(GAMEPAD_BUTTON_RIGHT_FACE_UP) || (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(mouseLogical(), GAME_MUTE_BTN))) toggleGameMusicMute();
+        if (IsKeyPressed(KEY_M) || padPressed(GAMEPAD_BUTTON_RIGHT_FACE_UP) || (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(mouseLogical(), TOUCH_UI ? GAME_MUTE_HIT : GAME_MUTE_BTN))) toggleGameMusicMute();
         if (IsKeyPressed(KEY_P) || padPressed(GAMEPAD_BUTTON_MIDDLE_RIGHT)) paused = !paused;
+        if (TOUCH_UI && IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(mouseLogical(), GAME_PAUSE_HIT)) { openEscMenu(); return; }
         if (paused) return;
         if (sectorPanel) {                                // SECTOR CLEARED: 6 s, or Space / A after a short beat
             sectorPanelT += dt;
-            if (sectorPanelT >= PANEL_TIME || (sectorPanelT > 0.6f && (IsKeyPressed(KEY_SPACE) || padPressed(GAMEPAD_BUTTON_RIGHT_FACE_DOWN)))) { sectorPanel = false; startHyper(); }
+            if (sectorPanelT >= PANEL_TIME || (sectorPanelT > 0.6f && (IsKeyPressed(KEY_SPACE) || padPressed(GAMEPAD_BUTTON_RIGHT_FACE_DOWN) || touchTap()))) { sectorPanel = false; startHyper(); }
             return;
         }
         sectorT += dt;
@@ -2004,6 +2015,7 @@ struct Game {
 
     void updatePlayer(float dt) {
         if (!playerAlive) {
+            touchDrag = false;   // re-anchor the drag on the respawned ship
             respawnTimer -= dt;
             bool divers = std::any_of(enemies.begin(), enemies.end(), [](const Enemy& e) { return e.state == DIVING; });
             if (respawnTimer <= 0 && lives <= 0) { mode = GAMEOVER; stageTimer = 0; saveHiScore(); }
@@ -2036,6 +2048,16 @@ struct Game {
         }
         player.x = Clamp(player.x + mv * 340 * dt, PLAYER_MARGIN_X, W - PLAYER_MARGIN_X);
         player.y = Clamp(player.y + mvy * 300 * dt, PLAYER_Y_HIGH, PLAYER_Y_LOW);
+        if (TOUCH_UI) {   // relative drag: the ship follows the finger's movement from wherever it touched; holding fires
+            Vector2 tp = mouseLogical();
+            if (!IsMouseButtonDown(MOUSE_BUTTON_LEFT)) touchDrag = false;
+            else if (!touchDrag) { if (!onHudButton(tp)) { touchDrag = true; touchLast = tp; } }
+            else {
+                player.x = Clamp(player.x + (tp.x - touchLast.x) * TOUCH_SENS, PLAYER_MARGIN_X, W - PLAYER_MARGIN_X);
+                player.y = Clamp(player.y + (tp.y - touchLast.y) * TOUCH_SENS, PLAYER_Y_HIGH, PLAYER_Y_LOW);
+                touchLast = tp;
+            }
+        }
 
         // debug runs: 1-5 pick a weapon, +/- change its level
         if (debugRun) {
@@ -2044,7 +2066,7 @@ struct Game {
             if (IsKeyPressed(KEY_MINUS) || IsKeyPressed(KEY_KP_SUBTRACT)) wlevel = std::max(0, wlevel - 1);
         }
         fireCooldown -= dt;
-        bool trigger = IsKeyDown(KEY_SPACE) || autoFire   // hold to keep firing (A or RT on a controller)
+        bool trigger = IsKeyDown(KEY_SPACE) || autoFire || touchDrag   // hold to keep firing (A or RT on a controller; finger down on touch)
                     || padDown(GAMEPAD_BUTTON_RIGHT_FACE_DOWN) || padDown(GAMEPAD_BUTTON_RIGHT_TRIGGER_2)
                     || (padOn() && GetGamepadAxisMovement(0, GAMEPAD_AXIS_RIGHT_TRIGGER) > 0.3f);
         laserOn = false;
@@ -2888,8 +2910,8 @@ struct Game {
         swarmTitles.clear();
         swarmFont = font;
         for (const char* f : { "C:/Windows/Fonts/arialbd.ttf", "C:/Windows/Fonts/segoeuib.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-                               "/System/Library/Fonts/Supplemental/Arial Bold.ttf" })
-            if (FileExists(f)) { Font ft = LoadFontEx(f, 112, nullptr, 0); if (ft.texture.id) { swarmFont = ft; swarmFontOwn = true; break; } }
+                               "/System/Library/Fonts/Supplemental/Arial Bold.ttf", "/system/fonts/DroidSans-Bold.ttf", "/system/fonts/Roboto-Regular.ttf" })
+            if (FileExists(f)) { Font ft = loadFontFile(f, 112); if (ft.texture.id) { swarmFont = ft; swarmFontOwn = true; break; } }
         swarmTitles.push_back({ nullptr, buildSwarm({ { "STAR", 92 }, { "SWARM", 92 } }, 70) });
         swarmTitles.push_back({ "DEVELOPED BY", buildSwarm({ { "GILAD", 86 }, { "GLOBEN", 86 } }, 90) });
         swarmTitles.push_back({ "DEDICATED TO", buildSwarm({ { "DANIEL", 86 }, { "GLOBEN", 86 } }, 90) });
@@ -2942,14 +2964,27 @@ struct Game {
     float scale = 1;
     Vector2 origin{ 0, 0 };
 
+    // A system font file. On Android raylib's file layer only reads the APK's assets and the app's own folder,
+    // so /system/fonts files are read here and handed over from memory.
+    static Font loadFontFile(const char* f, int size) {
+#ifdef __ANDROID__
+        std::ifstream in(f, std::ios::binary);
+        std::vector<unsigned char> d((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        if (d.empty()) return Font{};
+        return LoadFontFromMemory(".ttf", d.data(), (int)d.size(), size, nullptr, 0);
+#else
+        return LoadFontEx(f, size, nullptr, 0);
+#endif
+    }
     void loadFont() {
         const char* candidates[] = {
             "C:/Windows/Fonts/consolab.ttf", "C:/Windows/Fonts/lucon.ttf", "C:/Windows/Fonts/courbd.ttf",
             "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf",
-            "/System/Library/Fonts/Menlo.ttc" };
+            "/System/Library/Fonts/Menlo.ttc",
+            "/system/fonts/DroidSansMono.ttf", "/system/fonts/CutiveMono.ttf" };   // Android
         for (const char* f : candidates) {
             if (!FileExists(f)) continue;
-            font = LoadFontEx(f, 128, nullptr, 0);
+            font = loadFontFile(f, 128);
             if (font.texture.id != 0) {
                 GenTextureMipmaps(&font.texture);
                 SetTextureFilter(font.texture, TEXTURE_FILTER_TRILINEAR);
@@ -3565,7 +3600,7 @@ struct Game {
             text("SECTOR BONUS", W / 2.0f - 170, 412, 18, Color{ 255, 215, 60, PA });
             text(TextFormat("+%d", panelBonus), W / 2.0f + 90, 412, 18, Color{ 255, 215, 60, PA });
             drawCentered(sectorMedals.empty() ? "NO NEW MEDALS" : "MEDALS EARNED", 440, 11, Color{ 170, 175, 200, PA });
-            drawCentered(TextFormat("SPACE%s  -  JUMP TO HYPERSPACE  (%d)", padOn() ? " / A" : "", std::max(1, (int)ceilf(PANEL_TIME - sectorPanelT))), 516, 12, Color{ 200, 200, 220, PA });
+            drawCentered(TextFormat("%s%s  -  JUMP TO HYPERSPACE  (%d)", hint("SPACE", "TAP"), padOn() ? " / A" : "", std::max(1, (int)ceilf(PANEL_TIME - sectorPanelT))), 516, 12, Color{ 200, 200, 220, PA });
         }
         if (medalsOpen) {
             drawCentered(TextFormat("MEDALS   %d / %d", medalCount(), (int)MD_COUNT), 108, 26, Color{ 255, 215, 60, 255 });
@@ -3575,12 +3610,12 @@ struct Game {
                 text(nm, c.x - w / 2, c.y + 30, 11, medal[i] ? RAYWHITE : Color{ 110, 112, 130, 255 }); }
             const MedalDef& d = medalDefs()[medalSel];
             drawCentered(TextFormat("%s  -  %s", d.name, d.desc), 676, 12, medal[medalSel] ? Color{ 255, 230, 160, 255 } : Color{ 170, 172, 190, 255 });
-            drawCentered(padOn() ? "TAB / ESC / B  close" : "TAB / ESC  close", 694, 10, Color{ 120, 122, 140, 255 });
+            drawCentered(padOn() ? "TAB / ESC / B  close" : hint("TAB / ESC  close", "TAP OUTSIDE / BACK  close"), 694, 10, Color{ 120, 122, 140, 255 });
         }
     }
     // "PRESS SPACE TO START", with an A button when a controller is connected
     void drawStartPrompt() {
-        if (!padOn()) { drawCentered("PRESS SPACE TO START", 584, 26, RAYWHITE); return; }
+        if (!padOn()) { drawCentered(hint("PRESS SPACE TO START", "TAP TO START"), 584, 26, RAYWHITE); return; }
         float fs = 26 * scale, sp = customFont ? fs * 0.04f : fs / 10;
         float w1 = MeasureTextEx(font, "PRESS SPACE OR ", fs, sp).x / scale, w2 = MeasureTextEx(font, " TO START", fs, sp).x / scale, bw = 30;
         float x0 = W / 2.0f - (w1 + bw + w2) / 2;
@@ -3652,6 +3687,29 @@ struct Game {
     void toggleGameMusicMute() { gameMusicMuted = !gameMusicMuted; saveSettings(); }
     void drawGameMuteButton() { drawSpeakerButton(GAME_MUTE_BTN, gameMusicMuted, CheckCollisionPointRec(mouseLogical(), GAME_MUTE_BTN)); }
 
+    // ---- Touch controls (Android) ----
+    static constexpr Rectangle GAME_PAUSE_BTN{ W - 72.0f, 8, 28, 28 };   // on-screen pause, left of the music button
+    static constexpr Rectangle GAME_PAUSE_HIT{ W - 82.0f, 0, 42, 46 };   // finger-sized hit areas around the small icons
+    static constexpr Rectangle GAME_MUTE_HIT{ W - 40.0f, 0, 40, 46 };
+    static constexpr float TOUCH_SENS = 1.25f;                           // ship moves a bit further than the finger
+    bool touchDrag = false;                                              // a finger is steering (and firing)
+    Vector2 touchLast{ 0, 0 };
+    static Rectangle grow(Rectangle r, float d) { return { r.x - d, r.y - d, r.width + 2 * d, r.height + 2 * d }; }
+    bool onHudButton(Vector2 p) const {
+        if (mode == TITLE) return CheckCollisionPointRec(p, grow(MUTE_BTN, 8)) || CheckCollisionPointRec(p, grow(MEDAL_BTN, 8));
+        return gameMuteVisible() && (CheckCollisionPointRec(p, GAME_MUTE_HIT) || CheckCollisionPointRec(p, GAME_PAUSE_HIT));
+    }
+    // a tap that isn't on one of the small HUD buttons ("TAP TO START" / "TAP TO CONTINUE")
+    bool touchTap() const { return TOUCH_UI && IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && !onHudButton(mouseLogical()); }
+    void drawGamePauseButton() {
+        const Rectangle& r = GAME_PAUSE_BTN;
+        DrawRectangleRounded(r, 0.3f, 8, Color{ 20, 22, 40, 200 });
+        DrawRectangleRoundedLinesEx(r, 0.3f, 8, 1.5f, Color{ 120, 200, 255, 170 });
+        float bw = r.width * 0.16f, bh = r.height * 0.46f, cy = r.y + (r.height - bh) / 2, cx = r.x + r.width / 2;
+        DrawRectangleRec({ cx - bw * 1.6f, cy, bw, bh }, RAYWHITE);
+        DrawRectangleRec({ cx + bw * 0.6f, cy, bw, bh }, RAYWHITE);
+    }
+
     void drawRosterShapes() {
         for (int k = 0; k < 7; ++k)
             drawMonster(gfx.mon[roster()[k].mon], Gfx::MON_FRAMES, time * 0.8f + k * 0.13f, rosterCell(k), ROSTER_ICON, 0);
@@ -3719,7 +3777,7 @@ struct Game {
             return;
         }
         if (mode == PLAYING || mode == VICTORY || mode == GAMEOVER) drawStatusPanel();
-        if (gameMuteVisible()) drawGameMuteButton();
+        if (gameMuteVisible()) { drawGameMuteButton(); if (TOUCH_UI && !escMenu) drawGamePauseButton(); }
         {   int spare = std::max(0, lives - (playerAlive ? 1 : 0));
             if (spare <= 4) for (int i = 0; i < spare; ++i) drawShip(gfx.player, { SB_LIVES_X + 15 + i * 28.0f, H - 21.0f }, 26, 0, false);
             else drawShip(gfx.player, { SB_LIVES_X + 15, H - 21.0f }, 26, 0, false);   // "x N" label drawn with the HUD text
@@ -3799,10 +3857,10 @@ struct Game {
             drawTitleText();
             drawRosterText();
             if (fmodf(time, 1.0f) < 0.6f) drawStartPrompt();
-            drawCentered("ARROWS / WASD  move    SPACE  fire    P / ESC  pause", 640, 16, GRAY);
-            drawCentered("F11 / ALT+ENTER  fullscreen", 664, 16, GRAY);
+            drawCentered(hint("ARROWS / WASD  move    SPACE  fire    P / ESC  pause", "DRAG to move - hold to fire"), 640, 16, GRAY);
+            drawCentered(hint("F11 / ALT+ENTER  fullscreen", "BACK or II  pause"), 664, 16, GRAY);
             drawCentered(TextFormat("HIGH SCORE  %d", hiScore), 710, 22, GOLD);
-            drawCentered("CTRL+L  debug stage select", 760, 12, Color{ 90, 90, 110, 255 });
+            if (!TOUCH_UI) drawCentered("CTRL+L  debug stage select", 760, 12, Color{ 90, 90, 110, 255 });
             return;
         }
 
@@ -3863,14 +3921,14 @@ struct Game {
             drawCentered(TextFormat("FINAL SCORE   %d", score), H / 2 - 6, 28, RAYWHITE);
             drawCentered(TextFormat("HIT RATIO   %.1f%%     LIVES LEFT   %d", shotsFired ? 100.0f * hits / shotsFired : 0.0f, lives), H / 2 + 34, 18, YELLOW);
             if (debugRun) drawCentered("(debug run - high score not recorded)", H / 2 + 62, 14, GRAY);
-            if (stageTimer > 3.0f && fmodf(time, 1.0f) < 0.6f) drawCentered("PRESS SPACE", H / 2 + 110, 24, RAYWHITE);
+            if (stageTimer > 3.0f && fmodf(time, 1.0f) < 0.6f) drawCentered(hint("PRESS SPACE", "TAP TO CONTINUE"), H / 2 + 110, 24, RAYWHITE);
         }
         if (mode == GAMEOVER) {
             drawCentered("GAME OVER", H / 2 - 100, 52, RED);
             drawCentered(TextFormat("STAGE REACHED   %d", stage), H / 2 - 30, 22, RAYWHITE);
             drawCentered(TextFormat("SHOTS FIRED   %d", shotsFired), H / 2 + 0, 22, RAYWHITE);
             drawCentered(TextFormat("HIT RATIO   %.1f%%", shotsFired ? 100.0f * hits / shotsFired : 0.0f), H / 2 + 30, 22, YELLOW);
-            if (stageTimer > 2.0f && fmodf(time, 1.0f) < 0.6f) drawCentered("PRESS SPACE", H / 2 + 75, 24, RAYWHITE);
+            if (stageTimer > 2.0f && fmodf(time, 1.0f) < 0.6f) drawCentered(hint("PRESS SPACE", "TAP TO CONTINUE"), H / 2 + 75, 24, RAYWHITE);
         }
     }
 
@@ -4296,12 +4354,41 @@ struct Loader {
 } // namespace startup
 
 
+#ifdef __ANDROID__
+// raylib's Android backend keeps the audio device running while the app is in the background, and the game loop
+// is blocked then. Its app-command handler is wrapped so the game goes quiet and opens the pause menu instead.
+#include <android_native_app_glue.h>
+#include <GLES3/gl3.h>
+extern "C" struct android_app* GetAndroidApp(void);
+// raylib 5.5's OpenGL ES 3 path calls the extension name glDrawBuffersEXT (rlActiveDrawBuffers); Android's GLES3
+// library exports the core glDrawBuffers, so the name is forwarded.
+extern "C" void glDrawBuffersEXT(GLsizei n, const GLenum* bufs) { glDrawBuffers(n, bufs); }
+static void (*raylibAppCmd)(struct android_app*, int32_t) = nullptr;
+static std::atomic<bool> appLostFocus{ false };
+static void appCmdHook(struct android_app* app, int32_t cmd) {
+    raylibAppCmd(app, cmd);
+    if (cmd == APP_CMD_LOST_FOCUS || cmd == APP_CMD_PAUSE) { SetMasterVolume(0); appLostFocus = true; }
+    else if (cmd == APP_CMD_GAINED_FOCUS) SetMasterVolume(1);
+}
+#endif
+
 int main(int argc, char** argv) {
     // --selftest: auto-plays for a few seconds, saves a screenshot, exits (for CI/headless checks)
     bool selftest = argc > 1 && std::string(argv[1]) == "--selftest";
+#ifdef __ANDROID__
+    {   // save file and startup cache live in the app's private storage
+        const char* dir = GetAndroidApp()->activity->internalDataPath;
+        setenv("STARSWARM_DATA_DIR", dir, 1);
+        setenv("STARSWARM_CACHE_DIR", dir, 1);
+    }
+#endif
 
     SetConfigFlags(FLAG_VSYNC_HINT | FLAG_MSAA_4X_HINT | FLAG_WINDOW_RESIZABLE);
-    InitWindow(W, H, "Star Swarm");
+    InitWindow(TOUCH_UI ? 0 : W, TOUCH_UI ? 0 : H, "Star Swarm");   // Android: 0x0 = the display's native size (sharp, no upscaling)
+#ifdef __ANDROID__
+    raylibAppCmd = GetAndroidApp()->onAppCmd;
+    GetAndroidApp()->onAppCmd = appCmdHook;
+#else   // desktop window sizing (on a phone raylib always runs full screen)
     SetWindowMinSize(W / 2, H / 2);
     if (selftest) SetWindowSize(960, 1100);   // exercise scaling + letterboxing
     else {
@@ -4314,6 +4401,7 @@ int main(int argc, char** argv) {
         SetWindowSize(ww, wh);
         SetWindowPosition((int)mp.x + (mw - ww) / 2, (int)mp.y + std::max(30, (mh - wh) / 2));
     }
+#endif
     SetExitKey(KEY_NULL);   // ESC handled manually (closes the debug dialog instead of quitting)
     InitAudioDevice();
     SetTargetFPS(60);
@@ -4346,7 +4434,10 @@ int main(int argc, char** argv) {
     int shotFrame = (selftest && argc > 2) ? atoi(argv[2]) : 900;
     while (!WindowShouldClose()) {
         bool padBack = game.padPressed(GAMEPAD_BUTTON_MIDDLE_LEFT);   // controller Back / View = Esc (never quits)
-        if (IsKeyPressed(KEY_ESCAPE) || padBack) {
+#ifdef __ANDROID__
+        if (appLostFocus.exchange(false) && game.mode == PLAYING && !game.escMenu) game.openEscMenu();   // back from the background: paused
+#endif
+        if (IsKeyPressed(KEY_ESCAPE) || IsKeyPressed(KEY_BACK) || padBack) {   // phone Back button acts as Esc
             if (game.stageDialog) game.stageDialog = false;
             else if (game.escMenu) game.escMenu = false;               // ESC again = resume
             else if (game.mode == TITLE && game.medalsOpen) game.medalsOpen = false;

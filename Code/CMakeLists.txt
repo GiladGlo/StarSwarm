@@ -7,8 +7,17 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()
 
+# Android (android/build-apk.ps1 configures this with the NDK toolchain): raylib's Android backend on OpenGL ES 3.0,
+# and the game is built as libmain.so for a NativeActivity instead of an executable.
+if(ANDROID)
+  set(PLATFORM "Android" CACHE STRING "" FORCE)
+  set(OPENGL_VERSION "ES 3.0" CACHE STRING "" FORCE)
+endif()
+
 # Use an installed raylib if present, otherwise download and build it automatically.
-find_package(raylib 5.0 QUIET)
+if(NOT ANDROID)
+  find_package(raylib 5.0 QUIET)
+endif()
 if(NOT raylib_FOUND)
   include(FetchContent)
   set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
@@ -20,8 +29,16 @@ if(NOT raylib_FOUND)
   FetchContent_MakeAvailable(raylib)
 endif()
 
-add_executable(starswarm main.cpp)
-target_link_libraries(starswarm PRIVATE raylib)
+if(ANDROID)
+  add_library(starswarm SHARED main.cpp)
+  set_target_properties(starswarm PROPERTIES OUTPUT_NAME main)            # NativeActivity loads libmain.so
+  target_include_directories(starswarm PRIVATE ${ANDROID_NDK}/sources/android/native_app_glue)
+  target_link_options(starswarm PRIVATE -u ANativeActivity_onCreate)    # keep the glue's entry point
+  target_link_libraries(starswarm PRIVATE raylib android log EGL GLESv3 OpenSLES)
+else()
+  add_executable(starswarm main.cpp)
+  target_link_libraries(starswarm PRIVATE raylib)
+endif()
 
 # Content fingerprint for the startup cache: a hash of the art/sound generator sources, regenerated every build
 # (contenthash.h only changes when one of these files does).

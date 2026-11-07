@@ -12,7 +12,13 @@ namespace m3d {
 
 constexpr int COLS = 8, ROWS = 8, FRAMES = COLS * ROWS, CELL = 160;
 
-static const char* FS = R"(#version 330
+// Desktop: GLSL 3.30. Android: raylib is built for OpenGL ES 3.0, which takes the same shader under a GLSL ES header.
+#ifdef __ANDROID__
+#define M3D_GLSL_HEADER "#version 300 es\nprecision highp float;\n"
+#else
+#define M3D_GLSL_HEADER "#version 330\n"
+#endif
+static const char* FS = M3D_GLSL_HEADER R"(
 in vec2 fragTexCoord;
 out vec4 finalColor;
 uniform vec4  cellRect;      // x0, y0, w, h of the cell in atlas UV space
@@ -68,7 +74,7 @@ void main() {
     vec2 uv = (fragTexCoord - cellRect.xy) / cellRect.zw;          // 0..1 inside the cell
     vec2 p = uv * 2.0 - 1.0;                                         // y down, like the sprites
     for (int k = 0; k < 12; k++) {
-        float h1 = hash(vec3(seed, k, 1.3)), h2 = hash(vec3(k, seed, 7.1)), h3 = hash(vec3(2.7, k, seed)), h4 = hash(vec3(seed * 1.7, k * 3.0, 0.5));
+        float h1 = hash(vec3(seed, k, 1.3)), h2 = hash(vec3(k, seed, 7.1)), h3 = hash(vec3(2.7, k, seed)), h4 = hash(vec3(seed * 1.7, float(k) * 3.0, 0.5));   // GLSL ES has no implicit int->float
         cDir[k] = normalize(vec3(h1, h2, h3) * 2.0 - 1.0);
         cRad[k] = 0.14 + 0.26 * h4 * h4;
     }
