@@ -33,16 +33,30 @@ if(NOT raylib_FOUND)
   FetchContent_MakeAvailable(raylib)
 endif()
 
+# main.cpp: platform glue, startup loader and main loop; game.h: struct Game; game_*.cpp: its code, by area
+set(GAME_SOURCES main.cpp
+  game_audio.cpp game_stage.cpp game_meteors.cpp game_boss.cpp game_ship.cpp game_enemies.cpp game_menus.cpp
+  game_update.cpp game_weapons.cpp game_title.cpp game_draw.cpp game_hud.cpp game_save.cpp)
+
 if(ANDROID)
-  add_library(starswarm SHARED main.cpp)
+  add_library(starswarm SHARED ${GAME_SOURCES})
   set_target_properties(starswarm PROPERTIES OUTPUT_NAME main)            # NativeActivity loads libmain.so
   target_include_directories(starswarm PRIVATE ${ANDROID_NDK}/sources/android/native_app_glue)
   # keep the glue's entry point; route android_main through main.cpp (one game per process)
   target_link_options(starswarm PRIVATE -u ANativeActivity_onCreate -Wl,--wrap=android_main)
   target_link_libraries(starswarm PRIVATE raylib android log EGL GLESv3 OpenSLES)
 else()
-  add_executable(starswarm main.cpp)
+  add_executable(starswarm ${GAME_SOURCES})
   target_link_libraries(starswarm PRIVATE raylib)
+endif()
+
+# Compiler warnings for the game's own code (not raylib's)
+if(MSVC)
+  target_compile_options(starswarm PRIVATE /W4)
+  target_compile_definitions(starswarm PRIVATE _CRT_SECURE_NO_WARNINGS)   # getenv/fopen are fine here
+else()
+  # (raylib's raymath.h zero-fills structs with { 0 }, which -Wextra would flag in every file)
+  target_compile_options(starswarm PRIVATE -Wall -Wextra -Wno-missing-field-initializers)
 endif()
 
 # Balance-testing autopilot (bot.h, run with --bot). Off by default: release builds never contain it.

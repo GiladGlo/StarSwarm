@@ -81,8 +81,8 @@ inline std::vector<float> render(Id id, float sr = 44100) {
     int N = (int)(dur * sr);
     std::vector<float> out(N, 0.f);
     Rng rn(1000 + id);
-    SVF f1, f2, f3; Drop d1, d2; OnePole op1, op2;
-    float ph1 = 0, ph2 = 0, ph3 = 0, ph4 = 0;
+    SVF f1, f2; Drop d1, d2;
+    float ph1 = 0, ph2 = 0, ph3 = 0;
     float L, B, H;
     float revMix = 0, revSize = 0.8f;
     switch (id) {

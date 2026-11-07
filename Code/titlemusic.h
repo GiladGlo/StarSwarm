@@ -25,7 +25,7 @@ inline std::vector<float> renderTitleMusic(float sr = 44100) {
     // D minor: Dm(add9) -> Bbmaj7 -> Gm9 -> Asus4(b9-ish)
     static const float CH[4][5] = { { 50, 57, 62, 64, 65 }, { 46, 53, 57, 60, 62 }, { 43, 50, 55, 58, 62 }, { 45, 52, 57, 62, 64 } };
     static const float ROOT[4] = { 26, 22, 19, 21 };          // bass notes (D1, Bb0, G0, A0) — played an octave up below
-    Rng rn(77); SVF padF, windF, droneF; Reverb rv(sr, 0.9f); OnePole hpSend;
+    Rng rn(77); SVF padF, windF; Reverb rv(sr, 0.9f); OnePole hpSend;
     float bph[4] = { 0, 0, 0, 0 };
     // sparse bell notes (pentatonic, deterministic): time in loop, midi
     struct Bell { float t, m; };

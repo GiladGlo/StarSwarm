@@ -143,7 +143,7 @@ inline Texture2D nebulaJelly(int N, float aph, bool damaged) {
         float len = 0.55f + 0.12f * (i % 2) - 0.1f * fabsf(x0);
         P.push_back({ [=](Vector2 p) { return sdTentacle(p, { x0, 0.2f }, { x0 * 0.25f, 1 }, len, 0.07f, 0.02f, 0.07f, 7.0f, ph + i * 1.1f, 0); },
                       tent, 0.1f, 0.08f, 0.04f, 0.1f, 0.9f, 0.2f, 0.92f,
-                      [=](Vector2 p, float d, Vector3& c, float& h, float& e) {
+                      [=](Vector2 p, float d, Vector3& c, float&, float& e) {
                           float t; sdTentacle(p, { x0, 0.2f }, { x0 * 0.25f, 1 }, len, 0.07f, 0.02f, 0.07f, 7.0f, ph + i * 1.1f, 0, &t);
                           c = mix(tent, Vector3Scale(bell2, 1.2f), t);
                           c = Vector3Scale(c, 0.75f + 0.4f * fbm({ p.x * 14, p.y * 14 }, 2));

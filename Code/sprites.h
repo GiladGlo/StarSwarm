@@ -630,7 +630,7 @@ inline Texture2D bossShip(int idx, int N, std::vector<unsigned char>* mask) {
                       } });
         P.push_back({ [=](Vector2 p) { return sdEllipse(p, { e.x, e.y - 0.02f }, { 0.075f, 0.038f }); },
                       B.engine, 0.2f, 0.04f, 0.03f, 0, 0.3f, 1.6f, 1,
-                      [=](Vector2 p, float d, Vector3& c, float& h, float& em) {
+                      [=](Vector2, float d, Vector3& c, float& h, float& em) {
                           float r = sat(-d / 0.035f);                                   // 0 at rim -> 1 at centre
                           c = mix(Vector3Scale(B.engine, 0.55f), mix(B.engine, { 1, 1, 1 }, 0.7f), r * r);
                           em = 0.5f + 1.6f * r;
@@ -885,7 +885,7 @@ inline Texture2D dart(int N) {
     std::vector<Part> P;
     P.push_back({ [](Vector2 p) { return sdPoly(M(p), { { 0.0f, -0.25f }, { 0.62f, -0.62f }, { 0.55f, -0.38f }, { 0.12f, 0.2f } }) - 0.01f; },
                   dark, 0.08f, 0.1f, 0.05f, 0.8f, 0.7f, 0, 1,
-                  [=](Vector2 p, float d, Vector3& c, float&, float&) { if (d > -0.03f) c = red; } });
+                  [=](Vector2, float d, Vector3& c, float&, float&) { if (d > -0.03f) c = red; } });
     P.push_back({ [](Vector2 p) { return sdPoly(p, { { 0, 0.9f }, { 0.24f, -0.3f }, { 0.12f, -0.6f }, { -0.12f, -0.6f }, { -0.24f, -0.3f } }) - 0.02f; },
                   silver, 0.2f, 0.28f, 0.14f, 0.85f, 0.85f, 0, 1,
                   [=](Vector2 p, float, Vector3& c, float& h, float&) {
@@ -963,8 +963,8 @@ inline Texture2D planet(int N, int style, Vector3 c1, Vector3 c2, bool ring) {
                           case 0: {   // rocky: mottled terrain + craters
                               float n = sinf(p.x * 9 + sinf(p.y * 7) * 2) * sinf(p.y * 8 + cosf(p.x * 6));
                               c = mix(c1, c2, 0.5f + 0.5f * n);
-                              for (int k = 0; k < 6; ++k) { Vector2 cc{ (hash2(k, 1) - 0.5f) * 0.8f, (hash2(1, k) - 0.5f) * 0.8f };
-                                  float d = Vector2Distance(p, cc) / (0.04f + 0.06f * hash2(k, 7)); if (d < 1) c = Vector3Scale(c, 0.7f + 0.3f * d); }
+                              for (int k = 0; k < 6; ++k) { Vector2 cc{ (hash2((float)k, 1) - 0.5f) * 0.8f, (hash2(1, (float)k) - 0.5f) * 0.8f };
+                                  float d = Vector2Distance(p, cc) / (0.04f + 0.06f * hash2((float)k, 7)); if (d < 1) c = Vector3Scale(c, 0.7f + 0.3f * d); }
                               break; }
                           case 1: case 3: {   // bands (gas giant) / icy bands with polar caps
                               float b = sinf(p.y * 16 + sinf(p.x * 4 + p.y * 3) * 1.6f);
