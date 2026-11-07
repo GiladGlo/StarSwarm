@@ -45,6 +45,13 @@ else()
   target_link_libraries(starswarm PRIVATE raylib)
 endif()
 
+# Balance-testing autopilot (bot.h, run with --bot). Off by default: release builds never contain it.
+#   cmake -B build-bot -DSTARSWARM_BOT=ON && cmake --build build-bot --config Release
+option(STARSWARM_BOT "Build the autoplay bot (--bot) for balance testing" OFF)
+if(STARSWARM_BOT)
+  target_compile_definitions(starswarm PRIVATE STARSWARM_BOT)
+endif()
+
 # Content fingerprint for the startup cache: a hash of the art/sound generator sources, regenerated every build
 # (contenthash.h only changes when one of these files does).
 set(CONTENT_SOURCES sprites.h monsters.h meteor3d.h sfxsynth.h titlemusic.h gamemusic.h)

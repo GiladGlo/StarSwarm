@@ -35,6 +35,13 @@ static constexpr bool TOUCH_UI = true;
 #else
 static constexpr bool TOUCH_UI = false;
 #endif
+// Balance-testing bot (bot.h): only in builds configured with -DSTARSWARM_BOT=ON. BOT_CAUSE notes what hit the
+// ship (for the bot's statistics) and compiles to nothing otherwise.
+#ifdef STARSWARM_BOT
+#define BOT_CAUSE(c) (botLastHit = (c))
+#else
+#define BOT_CAUSE(c) ((void)0)
+#endif
 // Pick the touch or keyboard wording for an on-screen hint
 static constexpr const char* hint(const char* keys, const char* touch) { return TOUCH_UI ? touch : keys; }
 
@@ -397,6 +404,11 @@ struct Game {
     float heat = 0, laserTick = 0, laserTop = 0;
     bool  overheated = false, laserOn = false;
     bool  autoFire = false;                     // selftest: hold the trigger
+#ifdef STARSWARM_BOT
+    bool  botOn = false;                        // the autopilot is flying (bot.h)
+    float botMv = 0, botMvy = 0;                // its stick input this frame (-1..1)
+    int   botLastHit = 0;                       // what last hit the ship (bot::Cause)
+#endif
     std::vector<Meteor>   meteors;
     bool  meteorField = false;
     int   nextMeteorId = 1;
@@ -1287,6 +1299,7 @@ struct Game {
                     for (Vector2 o : b.beams()) {
                         float bx = beamXAt(o, player.y), ex = beamXAt(o, (float)H);
                         if (playerAlive && invuln <= 0 && shieldGrace <= 0 && fabsf(player.x - bx) < 13 + (shield ? SHIELD_RADIUS * 0.7f : 9)) {
+                            BOT_CAUSE(4);
                             if (shield) breakShield({ player.x, player.y - SHIELD_RADIUS }); else killPlayer();
                         }
                         if (GetRandomValue(0, 1)) {
@@ -2050,6 +2063,9 @@ struct Game {
             if (padDown(GAMEPAD_BUTTON_LEFT_FACE_DOWN)) mvy += 1;
             mv = Clamp(mv, -1, 1); mvy = Clamp(mvy, -1, 1);
         }
+#ifdef STARSWARM_BOT
+        if (botOn) { mv = botMv; mvy = botMvy; }
+#endif
         player.x = Clamp(player.x + mv * 340 * dt, PLAYER_MARGIN_X, W - PLAYER_MARGIN_X);
         player.y = Clamp(player.y + mvy * 300 * dt, PLAYER_Y_HIGH, PLAYER_Y_LOW);
         if (TOUCH_UI) {   // relative drag: the ship follows the finger's movement from wherever it touched; holding fires
@@ -2830,6 +2846,7 @@ struct Game {
                                       : eBullets[i].kind == BK_BOLT ? 4.0f : 5.5f, player, hitR)) {
                 Vector2 at = eBullets[i].pos;
                 eBullets.erase(eBullets.begin() + i);
+                BOT_CAUSE(1);
                 if (shield) breakShield(at); else killPlayer();
                 return;
             }
@@ -2838,6 +2855,7 @@ struct Game {
             if (CheckCollisionCircles(meteors[j].pos, meteors[j].r() * 0.82f, player, shield ? SHIELD_RADIUS - 2 : 13)) {
                 Vector2 at = meteors[j].pos;
                 hitMeteor(j, Vector2Subtract(at, player));
+                BOT_CAUSE(2);
                 if (shield) breakShield(at); else killPlayer();
                 return;
             }
@@ -2847,6 +2865,7 @@ struct Game {
                 e.state = DEAD; explode(e.pos, ORANGE, WHITE, 25, 200);
                 addScore(enemyPoints(e.type, true));
                 if (e.type == SPLITTER) pendingSplits.push_back(e.pos);
+                BOT_CAUSE(3);
                 if (shield) breakShield(e.pos); else killPlayer();
                 return;
             }
@@ -4029,6 +4048,9 @@ struct Game {
     static void put32(unsigned char* p, uint32_t v) { for (int i = 0; i < 4; ++i) p[i] = (unsigned char)(v >> (8 * i)); }
     static uint32_t get32(const unsigned char* p) { uint32_t v = 0; for (int i = 0; i < 4; ++i) v |= (uint32_t)p[i] << (8 * i); return v; }
     void writeSave() {
+#ifdef STARSWARM_BOT
+        if (botOn) return;                      // bot games never touch the player's save
+#endif
         unsigned char b[SAVE_SIZE] = {};
         memcpy(b, "SSAV", 4); b[4] = SAVE_VERSION; b[5] = 0; b[6] = SAVE_SIZE; b[7] = 0;
         uint32_t bits = 0; for (int i = 0; i < MD_COUNT; ++i) if (medal[i]) bits |= 1u << i;
@@ -4493,9 +4515,16 @@ extern "C" void __wrap_android_main(struct android_app* app) {
 }
 #endif
 
+#include "bot.h"   // empty unless STARSWARM_BOT
+
 int main(int argc, char** argv) {
     // --selftest: auto-plays for a few seconds, saves a screenshot, exits (for CI/headless checks)
     bool selftest = argc > 1 && std::string(argv[1]) == "--selftest";
+#ifdef STARSWARM_BOT
+    bool botMode = argc > 1 && std::string(argv[1]) == "--bot";   // --bot [runs] [seed] [startStage]: see bot.h
+#else
+    const bool botMode = false;
+#endif
 #ifdef __ANDROID__
     {   // save file and startup cache live in the app's private storage
         const char* dir = GetAndroidApp()->activity->internalDataPath;
@@ -4512,7 +4541,7 @@ int main(int argc, char** argv) {
         __android_log_print(ANDROID_LOG_INFO, "starswarm", "MSAA 4x: %d matching EGL configs -> %s", n, msaa ? "on" : "off");
     }
 #endif
-    SetConfigFlags(FLAG_VSYNC_HINT | FLAG_WINDOW_RESIZABLE | (msaa ? FLAG_MSAA_4X_HINT : 0));
+    SetConfigFlags((botMode ? 0 : FLAG_VSYNC_HINT) | FLAG_WINDOW_RESIZABLE | (msaa ? FLAG_MSAA_4X_HINT : 0));   // bot: uncapped
     InitWindow(TOUCH_UI ? 0 : W, TOUCH_UI ? 0 : H, "Star Swarm");   // Android: 0x0 = the display's native size (sharp, no upscaling)
 #ifdef __ANDROID__
     raylibAppCmd = GetAndroidApp()->onAppCmd;
@@ -4532,8 +4561,8 @@ int main(int argc, char** argv) {
     }
 #endif
     SetExitKey(KEY_NULL);   // ESC handled manually (closes the debug dialog instead of quitting)
-    InitAudioDevice();
-    SetTargetFPS(60);
+    if (!botMode) InitAudioDevice();   // the bot plays silently (sounds and music load as no-ops without a device)
+    SetTargetFPS(botMode ? 0 : 60);
     SetRandomSeed((unsigned)std::time(nullptr));
 
     static Game game;
@@ -4553,6 +4582,16 @@ int main(int argc, char** argv) {
         if (done) break;
     }
     game.buildTitleParticles();
+#ifdef STARSWARM_BOT
+    if (botMode) {
+        int runs = argc > 2 ? std::max(1, atoi(argv[2])) : 20, seed = argc > 3 ? atoi(argv[3]) : 1;
+        int start = argc > 4 ? std::clamp(atoi(argv[4]), 1, FINAL_STAGE) : 1;
+        bot::run(game, runs, seed, start);
+        gfx.unload(); loader.shutdown(); game.unloadGameMusic(); game.unloadTitleAudio(); game.unloadSfx();
+        CloseWindow();
+        return 0;
+    }
+#endif
     if (selftest) {
         int st = (argc > 3 && isdigit((unsigned char)argv[3][0])) ? atoi(argv[3]) : 1;
         if (argc > 3 && std::string(argv[3]) == "boss") st = CYCLE;

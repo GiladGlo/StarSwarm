@@ -21,6 +21,14 @@ cmake --build build -j
 ```
 Linux needs X11/GL dev packages: `sudo apt install libx11-dev libxcursor-dev libxrandr-dev libxinerama-dev libxi-dev libgl1-mesa-dev`
 
+**Balance-testing bot (developers only):** an autopilot that plays whole games at many times real speed and reports per-stage statistics: stage durations, how long the last enemies of a wave survive, deaths and shield hits by cause. It is compiled in only when you ask for it, so release builds never contain it, and it never writes your save file.
+```
+cmake -B build-bot -DSTARSWARM_BOT=ON
+cmake --build build-bot --config Release
+build-bot\Release\starswarm.exe --bot 40 1      # 40 games, seeds 1..40 (optional 3rd number: start stage)
+```
+It writes `bot_summary.txt`, `bot_runs.csv` and `bot_stages.csv` to the current folder, plus `bot_stuck.txt` and a screenshot for any wave still unfinished 60 s after only two enemies were left. See `bot.h` for how it plays.
+
 **Android (Windows host):** needs the Android SDK with an NDK, CMake and build-tools, plus a JDK (Android Studio installs all of them). No Gradle: the game builds as `libmain.so` for a `NativeActivity` and the script packs, aligns and signs the APK.
 ```
 cd android
