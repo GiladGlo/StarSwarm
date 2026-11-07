@@ -244,6 +244,10 @@ inline void run(Game& game, int runs, int seed, int startStage) {
         // seeding (the background stars take a random number whenever one wraps; the clock drives the formation sway).
         SetRandomSeed((unsigned)(seed + r - 1));
         game.time = 0; game.initStars(); game.fireCooldown = 0; game.boss = Boss{};   // + leftovers newGame keeps
+        game.respawnTimer = 0; game.prevVX = 0; game.muzzleT = 0; game.exhaustT = 0;      // ship FX timers (exhaust puffs draw
+        game.shieldGrow = 1; game.shieldGrace = 0; game.shieldHitFlash = 0; game.shieldRegen = 0;   // random numbers)
+        game.shake = 0; game.diveTimer = 0; game.droneT = game.droneFireT = game.droneWarp = game.droneBank = 0;
+        game.fireworkT = 0; game.clearT = 0; game.cycleT = 0; game.laserTick = 0; game.laserTop = 0; game.laserOn = false;
         game.newGame(startStage);
         s.open = false; s.lastAlive = true; s.lastShield = game.shield;
         float simT = 0; long frame = 0; const char* end = "timeout";
