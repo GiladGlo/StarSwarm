@@ -4359,6 +4359,8 @@ struct Loader {
 // is blocked then. Its app-command handler is wrapped so the game goes quiet and opens the pause menu instead.
 #include <android_native_app_glue.h>
 #include <GLES3/gl3.h>
+#include <EGL/egl.h>
+#include <android/log.h>
 #include <unistd.h>
 extern "C" struct android_app* GetAndroidApp(void);
 // raylib 5.5's OpenGL ES 3 path calls the extension name glDrawBuffersEXT (rlActiveDrawBuffers); Android's GLES3
@@ -4382,6 +4384,19 @@ static void appCmdHook(struct android_app* app, int32_t cmd) {
         break;
     }
 }
+// Does this device offer a 4x MSAA display config? raylib requests MSAA with eglChooseConfig() but never checks the
+// result, and with no match it carries on with no usable config, so there is no surface and the screen stays black.
+// So the game asks first, with the same attributes raylib uses, and only requests MSAA when a config exists.
+static int msaaConfigCount() {
+    EGLDisplay d = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+    if (d == EGL_NO_DISPLAY || !eglInitialize(d, nullptr, nullptr)) return 0;
+    const EGLint attrs[] = { EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT, EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8,
+                             EGL_DEPTH_SIZE, 16, EGL_SAMPLE_BUFFERS, 1, EGL_SAMPLES, 4, EGL_NONE };
+    EGLint n = 0;
+    if (!eglChooseConfig(d, attrs, nullptr, 0, &n)) n = 0;   // count only; raylib initializes the display again itself
+    return n;
+}
+
 // One game per process. raylib keeps internal state that a second InitWindow() in the same process can't
 // reset, so when the activity ends the process ends too, and Android starts a fresh one next time.
 // (Linked with -Wl,--wrap=android_main: the native-app glue calls this, and this calls raylib's android_main.)
@@ -4405,9 +4420,15 @@ int main(int argc, char** argv) {
     }
 #endif
 
-    // No MSAA on Android: raylib requests it in the window's EGL config, which not every GPU (or the emulator)
-    // offers, and a failed config leaves no surface at all. Phone screens are dense enough without it.
-    SetConfigFlags(FLAG_VSYNC_HINT | FLAG_WINDOW_RESIZABLE | (TOUCH_UI ? 0 : FLAG_MSAA_4X_HINT));
+    bool msaa = true;
+#ifdef __ANDROID__
+    {   // 4x MSAA only where the device offers it (see msaaConfigCount)
+        int n = msaaConfigCount();
+        msaa = n > 0;
+        __android_log_print(ANDROID_LOG_INFO, "starswarm", "MSAA 4x: %d matching EGL configs -> %s", n, msaa ? "on" : "off");
+    }
+#endif
+    SetConfigFlags(FLAG_VSYNC_HINT | FLAG_WINDOW_RESIZABLE | (msaa ? FLAG_MSAA_4X_HINT : 0));
     InitWindow(TOUCH_UI ? 0 : W, TOUCH_UI ? 0 : H, "Star Swarm");   // Android: 0x0 = the display's native size (sharp, no upscaling)
 #ifdef __ANDROID__
     raylibAppCmd = GetAndroidApp()->onAppCmd;
