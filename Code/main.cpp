@@ -408,6 +408,7 @@ struct Game {
     bool  botOn = false;                        // the autopilot is flying (bot.h)
     float botMv = 0, botMvy = 0;                // its stick input this frame (-1..1)
     int   botLastHit = 0;                       // what last hit the ship (bot::Cause)
+    int   botLastKind = 0;                      // and, for a shot, its kind (BKind)
 #endif
     std::vector<Meteor>   meteors;
     bool  meteorField = false;
@@ -2872,6 +2873,9 @@ struct Game {
             if (CheckCollisionCircles(eBullets[i].pos, eBullets[i].kind == BK_ENEMY ? 3.0f : eBullets[i].kind == BK_METEOR ? 8.0f
                                       : eBullets[i].kind == BK_BOLT ? 4.0f : 5.5f, player, hitR)) {
                 Vector2 at = eBullets[i].pos;
+#ifdef STARSWARM_BOT
+                botLastKind = eBullets[i].kind;
+#endif
                 eBullets.erase(eBullets.begin() + i);
                 BOT_CAUSE(1);
                 if (shield) breakShield(at); else killPlayer();

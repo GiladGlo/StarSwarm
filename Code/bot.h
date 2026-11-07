@@ -122,6 +122,7 @@ static const int ATTACKS = 11;
 struct Stats {
     std::vector<StageRec> stages; std::vector<RunRec> runs;
     int bossDeaths[BOSS_COUNT][ATTACKS]{}, bossHits[BOSS_COUNT][ATTACKS]{};   // deaths / shield hits per boss, by its attack at the time
+    int bossShotDeaths[BOSS_COUNT][16]{};                                      // deaths per boss by the kind of shot that hit (BKind)
     StageRec cur; bool open = false;
     int lastLives = 0; bool lastAlive = true, lastShield = false;
     void beginStage(const Game& g, int run) { cur = StageRec{}; cur.run = run; cur.stage = g.stage; cur.kind = stageKind(g.stage); open = true; }
@@ -150,7 +151,10 @@ struct Stats {
         // a boss's shots outlive its attack, so the attack is the one active, or the last one used, when the hit lands
         int atk = std::clamp((int)(g.boss.attack != A_NONE ? g.boss.attack : g.boss.lastAttack), 0, ATTACKS - 1);
         bool inBoss = g.mode == PLAYING && cur.kind == SK_BOSS && g.boss.active;
-        if (lastAlive && !g.playerAlive) { ++cur.deaths; ++cur.deathBy[g.botLastHit]; if (inBoss) ++bossDeaths[g.boss.index][atk]; }
+        if (lastAlive && !g.playerAlive) {
+            ++cur.deaths; ++cur.deathBy[g.botLastHit];
+            if (inBoss) { ++bossDeaths[g.boss.index][atk]; if (g.botLastHit == C_BULLET) ++bossShotDeaths[g.boss.index][std::clamp(g.botLastKind, 0, 15)]; }
+        }
         else if (lastShield && !g.shield && g.playerAlive) { ++cur.shieldHits; ++cur.shieldBy[g.botLastHit]; if (inBoss) ++bossHits[g.boss.index][atk]; }
         lastAlive = g.playerAlive; lastShield = g.shield;
     }
@@ -218,6 +222,14 @@ inline void writeReports(const Stats& s) {
             for (int a = 0; a < ATTACKS; ++a) if (s.bossDeaths[b][a] || s.bossHits[b][a]) fprintf(f, "  %s %d (%d)", ATTACK_NAME[a], s.bossDeaths[b][a], s.bossHits[b][a]);
             fprintf(f, "\n");
         }
+        static const char* KIND[16] = { "fighter shot", "orb", "missile", "meteor", "bolt", "spiral", "crystal", "c-spread", "c-pulse",
+                                        "c-homing", "c-ion", "c-photon", "flak", "13", "14", "15" };
+        fprintf(f, "\nBoss fights: deaths by the kind of shot that hit\n");
+        for (int b = 0; b < BOSS_COUNT; ++b) {
+            fprintf(f, "  %2d %-10s", b + 1, spr::bossDesigns()[b].name);
+            for (int k = 0; k < 16; ++k) if (s.bossShotDeaths[b][k]) fprintf(f, "  %s %d", KIND[k], s.bossShotDeaths[b][k]);
+            fprintf(f, "\n");
+        }
         fclose(f);
     }
 }
@@ -228,11 +240,23 @@ inline void run(Game& game, int runs, int seed, int startStage) {
     const float dt = 1.0f / 60.0f, CAP_MIN = 60.0f;                    // a game longer than 60 simulated minutes is cut off
     game.botOn = true; game.autoFire = true;
     for (int r = 1; r <= runs && !WindowShouldClose(); ++r) {
+        // Every game depends only on its seed: everything that draws random numbers or keeps time is reset after
+        // seeding (the background stars take a random number whenever one wraps; the clock drives the formation sway).
         SetRandomSeed((unsigned)(seed + r - 1));
+        game.time = 0; game.initStars(); game.fireCooldown = 0; game.boss = Boss{};   // + leftovers newGame keeps
         game.newGame(startStage);
         s.open = false; s.lastAlive = true; s.lastShield = game.shield;
         float simT = 0; long frame = 0; const char* end = "timeout";
+        // STARSWARM_BOT_TRACE=1: a per-frame fingerprint of the game state (first 20000 frames) in bot_trace_<run>.txt,
+        // for checking that a seed replays identically (compare two traces).
+        FILE* trace = getenv("STARSWARM_BOT_TRACE") ? fopen(TextFormat("bot_trace_%d.txt", r), "w") : nullptr;
         while (!WindowShouldClose()) {
+            if (trace && frame < 20000) {
+                int alive = 0; float ex = 0; for (auto& e : game.enemies) if (e.state != DEAD) { ++alive; ex += e.pos.x + e.pos.y; }
+                float bx = 0; for (auto& b : game.eBullets) bx += b.pos.x + b.pos.y;
+                fprintf(trace, "%ld stage %d px %.3f alive %d ex %.3f eb %zu bx %.3f pb %zu parts %zu score %d boss %.2f mode %d\n", frame, game.stage,
+                        game.player.x, alive, ex, game.eBullets.size(), bx, game.pBullets.size(), game.parts.size(), game.score, game.boss.hp, (int)game.mode);
+            }
             think(game, dt);
             game.update(dt * game.timeScale());
             game.tickRealTime(dt);
@@ -243,6 +267,7 @@ inline void run(Game& game, int runs, int seed, int startStage) {
             if (simT > CAP_MIN * 60) break;
             if (++frame % 30 == 0) game.draw(); else PollInputEvents();
         }
+        if (trace) fclose(trace);
         s.endStage(game.mode == VICTORY);
         s.runs.push_back({ r, seed + r - 1, game.stage, game.score, simT / 60, end });
         writeReports(s);                                               // after every run, so partial results survive
