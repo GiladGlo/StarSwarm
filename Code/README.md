@@ -1,10 +1,32 @@
 # Star Swarm — a Galaga-inspired shooter (C++17 / raylib)
 
-Single-file arcade shooter (renders at native resolution — resizable window, fullscreen, sharp text): formation fly-ins, sway/breathe formation, dive-bombing attacks, boss escorts, 2-hit bosses, synthesized sound, particle explosions, high-score saving. No asset files — ships and enemies are rendered at startup by a built-in per-pixel lighting renderer (`sprites.h`: SDF shapes + specular, fresnel rim, ambient occlusion, emissive bloom), and all audio is synthesized in code (`sfxsynth.h`).
+Arcade shooter (renders at native resolution — resizable window, fullscreen, sharp text): formation fly-ins, sway/breathe formation, dive-bombing attacks, boss escorts, 2-hit bosses, synthesized sound, particle explosions, high-score saving. No asset files — ships and enemies are rendered at startup by a built-in per-pixel lighting renderer (`sprites.h`: SDF shapes + specular, fresnel rim, ambient occlusion, emissive bloom), and all audio is synthesized in code (`sfxsynth.h`).
+
+## Source layout
+
+| File | What's in it |
+|---|---|
+| `main.cpp` | entry point: platform glue (Android lifecycle, GPU hints), the startup loader and asset cache, the main loop |
+| `game.h` | `struct Game` (all game state, short accessors, declarations) plus the shared types, constants and helpers |
+| `game_audio.cpp` | sound effects, title music, in-game music |
+| `game_stage.cpp` | new game, stage flow, waves and entry paths |
+| `game_enemies.cpp` | enemy movement and dives, explosions, scoring, the player getting hit |
+| `game_weapons.cpp` | the five weapons, the drone, the laser, packages, collisions |
+| `game_meteors.cpp` | meteor fields and mining outposts |
+| `game_boss.cpp` | the ten capital ships: attacks, damage, drawing |
+| `game_ship.cpp` | the player ship and the hyperspace jump |
+| `game_update.cpp` | the per-frame update |
+| `game_menus.cpp`, `game_hud.cpp`, `game_title.cpp`, `game_draw.cpp` | menus, HUD/medals/roster, title screen and loading, the main draw pass |
+| `game_save.cpp` | the save file |
+| `sprites.h`, `monsters.h`, `meteor3d.h` | the procedural art generators |
+| `sfxsynth.h`, `titlemusic.h`, `gamemusic.h` | the procedural sound and music generators |
+| `bot.h` | the balance-testing autopilot (bot builds only) |
 
 ## Build
 
-Requires CMake 3.16+ and a C++17 compiler. raylib 5.5 is downloaded automatically if not installed.
+Requires CMake 3.16+ and a C++17 compiler. raylib 5.5 is downloaded automatically if not installed. The game's own code builds warning-free at `/W4` (MSVC) and `-Wall -Wextra` (GCC/Clang); please keep it that way.
+
+**Continuous integration:** every push to GitHub builds the Windows exe and plays 10 seeded bot games on Linux (`.github/workflows/ci.yml`). The run fails if the build breaks, the game crashes, or a game never ends. The bot's report is attached to each run.
 
 **Windows (Visual Studio 2022 / Build Tools):**
 ```

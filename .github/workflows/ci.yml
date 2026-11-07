@@ -1,0 +1,56 @@
+# Every push / pull request:
+#  - windows: builds the release exe exactly like a local build (static runtime, /W4) and keeps it as an artifact
+#  - bot:     builds the balance-testing bot on Linux and plays 10 seeded games headless (Xvfb + Mesa software GL).
+#             Fails if the game crashes or any game hits the 60-minute cap (a wave or boss that never ends).
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S Code -B Code/build-ci
+      - name: Build
+        run: cmake --build Code/build-ci --config Release --parallel
+      - uses: actions/upload-artifact@v4
+        with:
+          name: starswarm-windows
+          path: Code/build-ci/Release/starswarm.exe
+
+  bot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install raylib build dependencies and a virtual display
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential cmake xvfb mesa-utils \
+            libasound2-dev libx11-dev libxrandr-dev libxi-dev libxcursor-dev libxinerama-dev \
+            libgl1-mesa-dev libglu1-mesa-dev libwayland-dev libxkbcommon-dev
+      - name: Build the bot
+        run: |
+          cmake -S Code -B Code/build-bot -DCMAKE_BUILD_TYPE=Release -DSTARSWARM_BOT=ON
+          cmake --build Code/build-bot --parallel
+      - name: Play 10 seeded games
+        env:
+          STARSWARM_DATA_DIR: ${{ runner.temp }}/starswarm-data
+          LIBGL_ALWAYS_SOFTWARE: "1"
+        run: |
+          mkdir -p bot-out && cd bot-out
+          xvfb-run -a -s "-screen 0 1280x1024x24" ../Code/build-bot/starswarm --bot 10 1
+          cat bot_summary.txt
+          { echo '```'; cat bot_summary.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          test "$(tail -n +2 bot_runs.csv | wc -l)" -eq 10 || { echo "::error::expected 10 finished games"; exit 1; }
+          if grep -q ',timeout$' bot_runs.csv; then echo "::error::a game hit the 60-minute cap (stuck wave?)"; exit 1; fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bot-report
+          path: bot-out/
