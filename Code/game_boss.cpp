@@ -170,7 +170,7 @@ void Game::updateBoss(float dt) {
             break;
         }
         case A_SPIRAL: {               // rotating multi-arm spiral
-            int arms = 2 + b.phase() + extra / 2;
+            int arms = 2 + std::min(b.phase(), 1) + extra / 2;   // the last phase no longer adds a 5th arm (the top bot killer)
             if (b.fireT <= 0) {
                 float dir = b.index % 2 ? -1.f : 1.f;
                 for (int k = 0; k < arms; ++k) {
