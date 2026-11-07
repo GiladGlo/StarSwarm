@@ -1683,6 +1683,31 @@ struct Game {
         if (wf > 0) DrawRectangle(0, 0, W, H, Color{ 230, 240, 255, (unsigned char)(140 * wf) });
     }
 
+    // Last stand: in a wave, a lone survivor (or Couriers left on their own: they never dive otherwise, and sit out
+    // of reach of the short-range Spread Cannon) stops looping and attacks the player head-on until it's shot down.
+    bool lastStand() const {
+        if (stageKind(stage) != SK_WAVE) return false;
+        int alive = 0, couriers = 0;
+        for (auto& e : enemies) {
+            if (e.state == DEAD) continue;
+            if (e.state == WAITING || e.state == ENTERING) return false;   // the wave is still arriving
+            ++alive; if (e.type == COURIER) ++couriers;
+        }
+        return alive == 1 || (alive > 0 && couriers == alive);
+    }
+    // Head-on attack dive: a short wind-up, then straight at where the player is, out past the bottom.
+    void startStrike(Enemy& e) {
+        Vector2 p = e.pos;
+        float tx = Clamp(player.x + frand(-25, 25), 40, W - 40), side = tx < W / 2 ? 1.f : -1.f;
+        e.path = buildPath({ p, { p.x, p.y - 25 }, { (p.x + tx) / 2, std::max(p.y + 80, H * 0.35f) }, { tx, player.y - 60 },
+                             { tx + side * 50, H + 60.0f } });
+        e.seg = 0; e.state = DIVING;
+        e.speed = (e.type == COURIER ? 230 : 300) * std::min(difficulty(), 1.5f);
+        e.shotsLeft = 1 + GetRandomValue(0, 1);
+        e.shootTimer = frand(0.3f, 0.6f);
+        playSfx(SFX_DIVE);
+    }
+
     void startDive(Enemy& e) {
         float dir = e.pos.x < W / 2 ? -1.f : 1.f;
         float tx = Clamp(player.x + frand(-60, 60), 40, W - 40);
@@ -2185,9 +2210,11 @@ struct Game {
             diveTimer -= dt;
             int maxDivers = 2 + std::min(4, stage / 2);
             if (diveTimer <= 0 && divingCount < maxDivers) {
+                bool last = lastStand();
                 std::vector<Enemy*> pool;
-                for (auto& e : enemies) if (e.state == FORMATION && e.type != COURIER) pool.push_back(&e);   // couriers never dive
-                if (!pool.empty()) {
+                for (auto& e : enemies) if (e.state == FORMATION && (e.type != COURIER || last)) pool.push_back(&e);   // couriers only dive in a last stand
+                if (!pool.empty() && last) startStrike(*pool[GetRandomValue(0, (int)pool.size() - 1)]);
+                else if (!pool.empty()) {
                     Enemy* lead = pool[GetRandomValue(0, (int)pool.size() - 1)];
                     startDive(*lead);
                     // Bosses bring escorts, like the arcade original

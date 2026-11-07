@@ -115,9 +115,13 @@ inline void dumpStuck(const Game& g, int run) {
     TakeScreenshot(TextFormat("bot_stuck_%d_%d.png", run, g.stage));
 }
 
+static const char* ATTACK_NAME[] = { "none", "spread", "burst", "spiral", "laser", "spawn", "ring", "homing", "twinlaser", "rain", "sweep" };
+static const int ATTACKS = 11;
+
 // ---- statistics: polled every frame ----
 struct Stats {
     std::vector<StageRec> stages; std::vector<RunRec> runs;
+    int bossDeaths[BOSS_COUNT][ATTACKS]{}, bossHits[BOSS_COUNT][ATTACKS]{};   // deaths / shield hits per boss, by its attack at the time
     StageRec cur; bool open = false;
     int lastLives = 0; bool lastAlive = true, lastShield = false;
     void beginStage(const Game& g, int run) { cur = StageRec{}; cur.run = run; cur.stage = g.stage; cur.kind = stageKind(g.stage); open = true; }
@@ -143,8 +147,11 @@ struct Stats {
                 if (cur.tail >= 60 && cur.tail - dt < 60) dumpStuck(g, run);   // a wave that won't end: record why
             }
         }
-        if (lastAlive && !g.playerAlive) { ++cur.deaths; ++cur.deathBy[g.botLastHit]; }
-        else if (lastShield && !g.shield && g.playerAlive) { ++cur.shieldHits; ++cur.shieldBy[g.botLastHit]; }
+        // a boss's shots outlive its attack, so the attack is the one active, or the last one used, when the hit lands
+        int atk = std::clamp((int)(g.boss.attack != A_NONE ? g.boss.attack : g.boss.lastAttack), 0, ATTACKS - 1);
+        bool inBoss = g.mode == PLAYING && cur.kind == SK_BOSS && g.boss.active;
+        if (lastAlive && !g.playerAlive) { ++cur.deaths; ++cur.deathBy[g.botLastHit]; if (inBoss) ++bossDeaths[g.boss.index][atk]; }
+        else if (lastShield && !g.shield && g.playerAlive) { ++cur.shieldHits; ++cur.shieldBy[g.botLastHit]; if (inBoss) ++bossHits[g.boss.index][atk]; }
         lastAlive = g.playerAlive; lastShield = g.shield;
     }
 };
@@ -204,7 +211,13 @@ inline void writeReports(const Stats& s) {
                     played[k] ? (float)deaths[k] / played[k] : 0, shield[k], played[k] ? (float)shield[k] / played[k] : 0);
         fprintf(f, "\nDeaths by cause:      "); for (int c = 1; c < C_COUNT; ++c) fprintf(f, "%s %d   ", CAUSE_NAME[c], dBy[c]);
         fprintf(f, "\nShield hits by cause: "); for (int c = 1; c < C_COUNT; ++c) fprintf(f, "%s %d   ", CAUSE_NAME[c], sBy[c]);
-        fprintf(f, "\n");
+        fprintf(f, "\n\nBoss fights: deaths (shield hits) by the boss's attack at the time\n");
+        for (int b = 0; b < BOSS_COUNT; ++b) {
+            int fights = 0; for (auto& r : s.stages) if (r.kind == SK_BOSS && r.stage == (b + 1) * CYCLE) ++fights;
+            fprintf(f, "  %2d %-10s %3d fights:", b + 1, spr::bossDesigns()[b].name, fights);
+            for (int a = 0; a < ATTACKS; ++a) if (s.bossDeaths[b][a] || s.bossHits[b][a]) fprintf(f, "  %s %d (%d)", ATTACK_NAME[a], s.bossDeaths[b][a], s.bossHits[b][a]);
+            fprintf(f, "\n");
+        }
         fclose(f);
     }
 }
