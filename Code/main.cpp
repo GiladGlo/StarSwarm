@@ -1245,7 +1245,7 @@ struct Game {
                         eBullets.back().aux = (float)k / arms + b.attackT * 0.25f;   // colour shifts along each arm
                     }
                     muzzleFlash(b.core(), coreColor(), 14, false);
-                    b.fireT = 0.094f / std::sqrt(ag);              // ~10% fewer orbs along each arm
+                    b.fireT = 0.110f / std::sqrt(ag);              // softened twice (~25% fewer orbs along each arm): the deadliest boss attack in bot testing
                 }
                 if (b.attackT > 2.4f) b.attack = A_NONE;
                 break;
