@@ -1,6 +1,7 @@
 // bot.h - autoplay bot for balance testing (only in builds configured with -DSTARSWARM_BOT=ON; never in releases).
 //
 //   starswarm --bot [runs=20] [seed=1] [startStage=1]
+//   starswarm --watch [seed=1] [startStage=1]   one game drawn every frame at normal speed, with sound, to watch
 //
 // Plays whole games at full simulation speed (fixed 1/60 s steps, uncapped frame rate, no audio, draws only every
 // 30th frame) and writes three files to the current folder:
@@ -235,7 +236,7 @@ inline void writeReports(const Stats& s) {
 }
 
 // ---- driver: plays `runs` games and writes the reports ----
-inline void run(Game& game, int runs, int seed, int startStage) {
+inline void run(Game& game, int runs, int seed, int startStage, bool watch = false) {
     Stats s;
     const float dt = 1.0f / 60.0f, CAP_MIN = 60.0f;                    // a game longer than 60 simulated minutes is cut off
     game.botOn = true; game.autoFire = true;
@@ -269,7 +270,7 @@ inline void run(Game& game, int runs, int seed, int startStage) {
             if (game.mode == GAMEOVER) { end = "game over"; break; }
             if (game.mode == VICTORY)  { end = "victory"; break; }
             if (simT > CAP_MIN * 60) break;
-            if (++frame % 30 == 0) game.draw(); else PollInputEvents();
+            if (++frame % 30 == 0 || watch) game.draw(); else PollInputEvents();   // watch: every frame, vsynced
         }
         if (trace) fclose(trace);
         s.endStage(game.mode == VICTORY);

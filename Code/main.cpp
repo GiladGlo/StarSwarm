@@ -417,9 +417,11 @@ int main(int argc, char** argv) {
     // --selftest: auto-plays for a few seconds, saves a screenshot, exits (for CI/headless checks)
     bool selftest = argc > 1 && std::string(argv[1]) == "--selftest";
 #ifdef STARSWARM_BOT
-    bool botMode = argc > 1 && std::string(argv[1]) == "--bot";   // --bot [runs] [seed] [startStage]: see bot.h
+    bool botWatch = argc > 1 && std::string(argv[1]) == "--watch";   // --watch [seed] [startStage]: one bot game at normal speed
+    bool botMode = botWatch || (argc > 1 && std::string(argv[1]) == "--bot");   // --bot [runs] [seed] [startStage]: see bot.h
+    bool botFast = botMode && !botWatch;
 #else
-    const bool botMode = false;
+    const bool botMode = false, botFast = false;
 #endif
 #ifdef __ANDROID__
     {   // save file and startup cache live in the app's private storage
@@ -437,7 +439,7 @@ int main(int argc, char** argv) {
         __android_log_print(ANDROID_LOG_INFO, "starswarm", "MSAA 4x: %d matching EGL configs -> %s", n, msaa ? "on" : "off");
     }
 #endif
-    SetConfigFlags((botMode ? 0 : FLAG_VSYNC_HINT) | FLAG_WINDOW_RESIZABLE | (msaa ? FLAG_MSAA_4X_HINT : 0));   // bot: uncapped
+    SetConfigFlags((botFast ? 0 : FLAG_VSYNC_HINT) | FLAG_WINDOW_RESIZABLE | (msaa ? FLAG_MSAA_4X_HINT : 0));   // bot: uncapped
     InitWindow(TOUCH_UI ? 0 : W, TOUCH_UI ? 0 : H, "Star Swarm");   // Android: 0x0 = the display's native size (sharp, no upscaling)
 #ifdef __ANDROID__
     raylibAppCmd = GetAndroidApp()->onAppCmd;
@@ -457,8 +459,8 @@ int main(int argc, char** argv) {
     }
 #endif
     SetExitKey(KEY_NULL);   // ESC handled manually (closes the debug dialog instead of quitting)
-    if (!botMode) InitAudioDevice();   // the bot plays silently (sounds and music load as no-ops without a device)
-    SetTargetFPS(botMode ? 0 : 60);
+    if (!botFast) InitAudioDevice();   // the bot plays silently (sounds and music load as no-ops without a device)
+    SetTargetFPS(botFast ? 0 : 60);
     SetRandomSeed((unsigned)std::time(nullptr));
 
     static Game game;
@@ -480,9 +482,10 @@ int main(int argc, char** argv) {
     game.buildTitleParticles();
 #ifdef STARSWARM_BOT
     if (botMode) {
-        int runs = argc > 2 ? std::max(1, atoi(argv[2])) : 20, seed = argc > 3 ? atoi(argv[3]) : 1;
-        int start = argc > 4 ? std::clamp(atoi(argv[4]), 1, FINAL_STAGE) : 1;
-        bot::run(game, runs, seed, start);
+        int a = botWatch ? 1 : 2;   // --watch has no run count
+        int runs = botWatch ? 1 : argc > 2 ? std::max(1, atoi(argv[2])) : 20, seed = argc > a + 1 ? atoi(argv[a + 1]) : 1;
+        int start = argc > a + 2 ? std::clamp(atoi(argv[a + 2]), 1, FINAL_STAGE) : 1;
+        bot::run(game, runs, seed, start, botWatch);
         gfx.unload(); loader.shutdown(); game.unloadGameMusic(); game.unloadTitleAudio(); game.unloadSfx();
         CloseWindow();
         return 0;
